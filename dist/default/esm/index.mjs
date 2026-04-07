@@ -1,8 +1,8 @@
 import debug from 'debug';
 import { Cookie, CookieJar } from 'tough-cookie';
 import setCookie from 'set-cookie-parser';
-import { Headers } from 'headers-polyfill';
-import fetch from 'cross-fetch';
+import { Headers as Headers$1 } from 'headers-polyfill';
+import fetch$1 from 'cross-fetch';
 import { Type } from '@sinclair/typebox';
 import { Check } from '@sinclair/typebox/value';
 import * as OTPAuth from 'otpauth';
@@ -1003,10 +1003,11 @@ function withTransform(fetchFn, transform) {
 class TwitterGuestAuth {
   constructor(bearerToken, options) {
     this.options = options;
-    this.fetch = withTransform(options?.fetch ?? fetch, options?.transform);
+    this.fetch = withTransform(options?.fetch ?? fetch$1, options?.transform);
     this.rateLimitStrategy = options?.rateLimitStrategy ?? new WaitingRateLimitStrategy();
     this.bearerToken = bearerToken;
     this.jar = new CookieJar();
+    this.logger = options?.logger;
   }
   async onRateLimit(event) {
     await this.rateLimitStrategy.onRateLimit(event);
@@ -1140,7 +1141,7 @@ class TwitterGuestAuth {
   }
   async updateGuestTokenCore() {
     const guestActivateUrl = "https://api.x.com/1.1/guest/activate.json";
-    const headers = new Headers({
+    const headers = new Headers$1({
       authorization: `Bearer ${this.bearerToken}`,
       "user-agent": CHROME_USER_AGENT,
       accept: "*/*",
@@ -1176,6 +1177,11 @@ class TwitterGuestAuth {
     this.guestToken = newGuestToken;
     this.guestCreatedAt = /* @__PURE__ */ new Date();
     await this.setCookie("gt", newGuestToken);
+    this.logger?.emit({
+      event: "auth.guest_token",
+      level: "info",
+      detail: `Guest token updated (length: ${newGuestToken.length})`
+    });
     log$4(`Updated guest token (length: ${newGuestToken.length})`);
   }
   /**
@@ -1340,14 +1346,41 @@ const CHROME_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit
 const CHROME_SEC_CH_UA = '"Not(A:Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"';
 
 const log$2 = debug("twitter-scraper:api");
+function extractEndpoint(url) {
+  try {
+    const u = new URL(url);
+    const graphqlMatch = u.pathname.match(/\/graphql\/[^/]+\/([^/?]+)/);
+    if (graphqlMatch) return graphqlMatch[1];
+    const restMatch = u.pathname.match(/\/1\.1\/(.+?)(?:\.json)?$/);
+    if (restMatch) return restMatch[1];
+    return u.pathname;
+  } catch {
+    return url;
+  }
+}
+function parseIntOrUndef(value) {
+  if (value == null) return void 0;
+  const n = parseInt(value, 10);
+  return isNaN(n) ? void 0 : n;
+}
 const bearerToken = "AAAAAAAAAAAAAAAAAAAAAFQODgEAAAAAVHTp76lzh3rFzcHbmHVvQxYYpTw%3DckAlMINMjmCwxUcaXbAN4XqJVdgMJaHqNOFgPMK0zN1qLqLQCF";
 const bearerToken2 = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA";
 async function jitter(maxMs) {
   const jitter2 = Math.random() * maxMs;
   await new Promise((resolve) => setTimeout(resolve, jitter2));
 }
-async function requestApi(url, auth, method = "GET", platform = new Platform(), headers = new Headers(), bearerTokenOverride, body) {
+async function requestApi(url, auth, method = "GET", platform = new Platform(), headers = new Headers$1(), bearerTokenOverride, body) {
   log$2(`Making ${method} request to ${url}`);
+  const endpoint = extractEndpoint(url);
+  const logger = auth.logger;
+  logger?.emit({
+    event: "http.request",
+    level: "debug",
+    method,
+    url,
+    endpoint
+  });
+  const startTime = Date.now();
   await auth.installTo(headers, url, bearerTokenOverride);
   await platform.randomizeCiphers();
   if (auth instanceof TwitterGuestAuth && auth.options?.experimental?.xClientTransactionId) {
@@ -1378,6 +1411,13 @@ async function requestApi(url, auth, method = "GET", platform = new Platform(), 
       if (!(err instanceof Error)) {
         throw err;
       }
+      logger?.emit({
+        event: "error",
+        level: "error",
+        code: "NETWORK_ERROR",
+        message: err.message,
+        endpoint
+      });
       return {
         success: false,
         err
@@ -1385,6 +1425,39 @@ async function requestApi(url, auth, method = "GET", platform = new Platform(), 
     }
     await updateCookieJar(auth.cookieJar(), res.headers);
     if (res.status === 429) {
+      const durationMs2 = Date.now() - startTime;
+      const rateLimitRemaining2 = parseIntOrUndef(
+        res.headers.get("x-rate-limit-remaining")
+      );
+      const rateLimitReset2 = parseIntOrUndef(
+        res.headers.get("x-rate-limit-reset")
+      );
+      const rateLimitLimit2 = parseIntOrUndef(
+        res.headers.get("x-rate-limit-limit")
+      );
+      logger?.emit({
+        event: "http.response",
+        level: "warn",
+        method,
+        url,
+        endpoint,
+        statusCode: 429,
+        durationMs: durationMs2,
+        rateLimitRemaining: rateLimitRemaining2,
+        rateLimitReset: rateLimitReset2,
+        rateLimitLimit: rateLimitLimit2
+      });
+      const resetTime = rateLimitReset2 ? rateLimitReset2 : 0;
+      const waitMs = resetTime ? Math.max(0, (resetTime - Date.now() / 1e3) * 1e3) : 0;
+      logger?.emit({
+        event: "http.rate_limit",
+        level: "warn",
+        endpoint,
+        rateLimitLimit: rateLimitLimit2 ?? 0,
+        rateLimitRemaining: rateLimitRemaining2 ?? 0,
+        rateLimitReset: rateLimitReset2 ?? 0,
+        waitMs
+      });
       log$2("Rate limit hit, waiting for retry...");
       await auth.onRateLimit({
         fetchParameters,
@@ -1392,12 +1465,48 @@ async function requestApi(url, auth, method = "GET", platform = new Platform(), 
       });
     }
   } while (res.status === 429);
+  const durationMs = Date.now() - startTime;
+  const rateLimitRemaining = parseIntOrUndef(
+    res.headers.get("x-rate-limit-remaining")
+  );
+  const rateLimitReset = parseIntOrUndef(res.headers.get("x-rate-limit-reset"));
+  const rateLimitLimit = parseIntOrUndef(res.headers.get("x-rate-limit-limit"));
   if (!res.ok) {
-    return {
-      success: false,
-      err: await ApiError.fromResponse(res)
-    };
+    const err = await ApiError.fromResponse(res);
+    logger?.emit({
+      event: "http.response",
+      level: "warn",
+      method,
+      url,
+      endpoint,
+      statusCode: res.status,
+      durationMs,
+      rateLimitRemaining,
+      rateLimitReset,
+      rateLimitLimit
+    });
+    logger?.emit({
+      event: "error",
+      level: "error",
+      code: "API_ERROR",
+      statusCode: res.status,
+      message: err.message,
+      endpoint
+    });
+    return { success: false, err };
   }
+  logger?.emit({
+    event: "http.response",
+    level: "info",
+    method,
+    url,
+    endpoint,
+    statusCode: res.status,
+    durationMs,
+    rateLimitRemaining,
+    rateLimitReset,
+    rateLimitLimit
+  });
   const value = await flexParseJson(res);
   if (res.headers.get("x-rate-limit-incoming") == "0") {
     auth.deleteToken();
@@ -1541,6 +1650,11 @@ const _TwitterUserAuth = class _TwitterUserAuth extends TwitterGuestAuth {
     return cookies.some((c) => c.key === "ct0") && cookies.some((c) => c.key === "auth_token");
   }
   async login(username, password, email, twoFactorSecret) {
+    this.logger?.emit({
+      event: "auth.login_start",
+      level: "info",
+      detail: `Login starting for ${username}`
+    });
     await this.preflight();
     if (!this.guestToken) {
       await this.updateGuestToken();
@@ -1558,6 +1672,12 @@ const _TwitterUserAuth = class _TwitterUserAuth extends TwitterGuestAuth {
         throw new Error("flow_token not found.");
       }
       const subtaskId = next.response.subtasks[0].subtask_id;
+      this.logger?.emit({
+        event: "auth.login_step",
+        level: "debug",
+        subtaskId,
+        detail: `Handling subtask: ${subtaskId}`
+      });
       const configuredDelay = this.options?.experimental?.flowStepDelay;
       const delay = configuredDelay !== void 0 ? configuredDelay : 1e3 + Math.floor(Math.random() * 2e3);
       if (delay > 0) {
@@ -1575,8 +1695,18 @@ const _TwitterUserAuth = class _TwitterUserAuth extends TwitterGuestAuth {
       }
     }
     if (next.status === "error") {
+      this.logger?.emit({
+        event: "auth.login_failure",
+        level: "error",
+        detail: `Login failed: ${next.err.message}`
+      });
       throw next.err;
     }
+    this.logger?.emit({
+      event: "auth.login_success",
+      level: "info",
+      detail: "Login completed successfully"
+    });
   }
   /**
    * Pre-flight request to establish Cloudflare cookies and session context.
@@ -1584,7 +1714,7 @@ const _TwitterUserAuth = class _TwitterUserAuth extends TwitterGuestAuth {
    */
   async preflight() {
     try {
-      const headers = new Headers({
+      const headers = new Headers$1({
         accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "accept-language": "en-US,en;q=0.9",
         "sec-ch-ua": CHROME_SEC_CH_UA,
@@ -1626,7 +1756,7 @@ const _TwitterUserAuth = class _TwitterUserAuth extends TwitterGuestAuth {
     }
     try {
       const logoutUrl = "https://api.x.com/1.1/account/logout.json";
-      const headers = new Headers();
+      const headers = new Headers$1();
       await this.installTo(headers, logoutUrl);
       await this.fetch(logoutUrl, {
         method: "POST",
@@ -2033,7 +2163,7 @@ const _TwitterUserAuth = class _TwitterUserAuth extends TwitterGuestAuth {
         2
       )
     );
-    const headers = new Headers({
+    const headers = new Headers$1({
       accept: "*/*",
       "accept-language": "en-US,en;q=0.9",
       "content-type": "application/json",
@@ -3424,6 +3554,160 @@ async function getTweetAnonymous(id, auth) {
   return parseTimelineEntryItemContentRaw(res.value.data, id);
 }
 
+function randomHex(bytes) {
+  let result = "";
+  for (let i = 0; i < bytes; i++) {
+    result += Math.floor(Math.random() * 256).toString(16).padStart(2, "0");
+  }
+  return result;
+}
+class ScraperLogger {
+  constructor(transports) {
+    this.transports = [];
+    this.sessionId = randomHex(8);
+    this.metrics = {
+      sessionId: this.sessionId,
+      startTime: (/* @__PURE__ */ new Date()).toISOString(),
+      totalRequests: 0,
+      successfulRequests: 0,
+      failedRequests: 0,
+      rateLimitsHit: 0,
+      totalRateLimitWaitMs: 0,
+      requestsByEndpoint: {},
+      scrapeOperations: [],
+      parseSuccessCount: 0,
+      parseFailureCount: 0,
+      errors: []
+    };
+    if (transports) {
+      for (const t of transports) {
+        this.transports.push(t);
+      }
+    }
+  }
+  emit(event) {
+    const stamped = {
+      ...event,
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      sessionId: this.sessionId
+    };
+    this.updateMetrics(stamped);
+    for (const transport of this.transports) {
+      transport.write(stamped);
+    }
+  }
+  addTransport(transport) {
+    this.transports.push(transport);
+  }
+  removeTransport(transport) {
+    const idx = this.transports.indexOf(transport);
+    if (idx !== -1) {
+      this.transports.splice(idx, 1);
+    }
+  }
+  getMetrics() {
+    return { ...this.metrics };
+  }
+  async flush() {
+    if (!this.metrics.endTime) {
+      this.metrics.endTime = (/* @__PURE__ */ new Date()).toISOString();
+    }
+    await Promise.all(
+      this.transports.filter((t) => typeof t.flush === "function").map((t) => t.flush())
+    );
+  }
+  async close() {
+    await this.flush();
+    await Promise.all(
+      this.transports.filter((t) => typeof t.close === "function").map((t) => t.close())
+    );
+  }
+  get hasTransports() {
+    return this.transports.length > 0;
+  }
+  // -------------------------------------------------------------------------
+  // Internal metrics bookkeeping
+  // SYNC: This logic mirrors buildMetrics() in logger-reports.ts.
+  // If you add a new event type, update both places.
+  // -------------------------------------------------------------------------
+  getOrCreateEndpoint(endpoint) {
+    let entry = this.metrics.requestsByEndpoint[endpoint];
+    if (!entry) {
+      entry = {
+        endpoint,
+        requestCount: 0,
+        totalDurationMs: 0,
+        minDurationMs: Number.MAX_SAFE_INTEGER,
+        maxDurationMs: 0,
+        errorCount: 0,
+        rateLimitCount: 0,
+        lastStatus: 0
+      };
+      this.metrics.requestsByEndpoint[endpoint] = entry;
+    }
+    return entry;
+  }
+  updateMetrics(event) {
+    switch (event.event) {
+      case "http.request": {
+        this.metrics.totalRequests++;
+        break;
+      }
+      case "http.response": {
+        if (event.statusCode < 400) {
+          this.metrics.successfulRequests++;
+        } else {
+          this.metrics.failedRequests++;
+        }
+        const entry = this.getOrCreateEndpoint(event.endpoint);
+        entry.requestCount++;
+        entry.totalDurationMs += event.durationMs;
+        entry.minDurationMs = Math.min(entry.minDurationMs, event.durationMs);
+        entry.maxDurationMs = Math.max(entry.maxDurationMs, event.durationMs);
+        if (event.statusCode >= 400) {
+          entry.errorCount++;
+        }
+        entry.lastStatus = event.statusCode;
+        break;
+      }
+      case "http.rate_limit": {
+        this.metrics.rateLimitsHit++;
+        this.metrics.totalRateLimitWaitMs += event.waitMs;
+        const entry = this.getOrCreateEndpoint(event.endpoint);
+        entry.rateLimitCount++;
+        break;
+      }
+      case "scrape.complete": {
+        this.metrics.scrapeOperations.push({
+          operation: event.operation,
+          totalItems: event.totalItems,
+          totalPages: event.totalPages,
+          durationMs: event.durationMs,
+          errors: event.errors
+        });
+        break;
+      }
+      case "parse.success": {
+        this.metrics.parseSuccessCount += event.count ?? 1;
+        break;
+      }
+      case "parse.failure": {
+        this.metrics.parseFailureCount += event.count ?? 1;
+        break;
+      }
+      case "error": {
+        this.metrics.errors.push({
+          timestamp: event.timestamp,
+          code: event.code ?? "UNKNOWN",
+          message: event.message,
+          endpoint: event.endpoint
+        });
+        break;
+      }
+    }
+  }
+}
+
 async function* getDmConversationMessagesGenerator(conversationId, maxMessages, initialCursor, fetchFunc) {
   let nMessages = 0;
   let cursor = initialCursor;
@@ -3573,6 +3857,323 @@ function findDmConversationsByUserId(inbox, userId) {
   return conversations;
 }
 
+async function getWriteHeaders(auth, contentType = "application/json") {
+  const cookies = await auth.cookieJar().getCookies("https://x.com");
+  const ct0 = cookies.find((c) => c.key === "ct0");
+  const headers = new Headers();
+  headers.set("authorization", `Bearer ${bearerToken}`);
+  headers.set(
+    "cookie",
+    await auth.cookieJar().getCookieString("https://x.com")
+  );
+  headers.set("content-type", contentType);
+  headers.set("x-twitter-auth-type", "OAuth2Session");
+  headers.set("x-twitter-active-user", "yes");
+  headers.set("x-twitter-client-language", "en");
+  if (ct0) headers.set("x-csrf-token", ct0.value);
+  return headers;
+}
+const CREATE_TWEET_URL = "https://x.com/i/api/graphql/a1p9RWpkYKBjWv_I3WzS-A/CreateTweet";
+const CREATE_TWEET_FEATURES = {
+  interactive_text_enabled: true,
+  longform_notetweets_inline_media_enabled: false,
+  responsive_web_text_conversations_enabled: false,
+  tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled: false,
+  vibe_api_enabled: false,
+  rweb_lists_timeline_redesign_enabled: true,
+  responsive_web_graphql_exclude_directive_enabled: true,
+  verified_phone_label_enabled: false,
+  creator_subscriptions_tweet_preview_api_enabled: true,
+  responsive_web_graphql_timeline_navigation_enabled: true,
+  responsive_web_graphql_skip_user_profile_image_extensions_enabled: false,
+  tweetypie_unmention_optimization_enabled: true,
+  responsive_web_edit_tweet_api_enabled: true,
+  graphql_is_translatable_rweb_tweet_is_translatable_enabled: true,
+  view_counts_everywhere_api_enabled: true,
+  longform_notetweets_consumption_enabled: true,
+  tweet_awards_web_tipping_enabled: false,
+  freedom_of_speech_not_reach_fetch_enabled: true,
+  standardized_nudges_misinfo: true,
+  longform_notetweets_rich_text_read_enabled: true,
+  responsive_web_enhance_cards_enabled: false,
+  subscriptions_verification_info_enabled: true,
+  subscriptions_verification_info_reason_enabled: true,
+  subscriptions_verification_info_verified_since_enabled: true,
+  super_follow_badge_privacy_enabled: false,
+  super_follow_exclusive_tweet_notifications_enabled: false,
+  super_follow_tweet_api_enabled: false,
+  super_follow_user_api_enabled: false,
+  android_graphql_skip_api_media_color_palette: false,
+  creator_subscriptions_subscription_count_enabled: false,
+  blue_business_profile_image_shape_enabled: false,
+  unified_cards_ad_metadata_container_dynamic_card_content_query_enabled: false,
+  rweb_video_timestamps_enabled: false,
+  c9s_tweet_anatomy_moderator_badge_enabled: false,
+  responsive_web_twitter_article_tweet_consumption_enabled: false
+};
+async function sendTweet(text, auth, replyToTweetId) {
+  const headers = await getWriteHeaders(auth);
+  const variables = {
+    tweet_text: text,
+    dark_request: false,
+    media: {
+      media_entities: [],
+      possibly_sensitive: false
+    },
+    semantic_annotation_ids: []
+  };
+  if (replyToTweetId) {
+    variables.reply = { in_reply_to_tweet_id: replyToTweetId };
+  }
+  const response = await fetch(CREATE_TWEET_URL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      variables,
+      features: CREATE_TWEET_FEATURES,
+      fieldToggles: {}
+    })
+  });
+  await updateCookieJar(auth.cookieJar(), response.headers);
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(
+      `sendTweet failed (${response.status}): ${errText.slice(0, 500)}`
+    );
+  }
+  const data = await response.json();
+  const tweetResult = data?.data?.create_tweet?.tweet_results?.result;
+  const tweetId = tweetResult?.rest_id ?? tweetResult?.tweet?.rest_id;
+  return { tweetId, response };
+}
+const LIKE_TWEET_URL = "https://x.com/i/api/graphql/lI07N6Otwv1PhnEgXILM7A/FavoriteTweet";
+async function likeTweet(tweetId, auth) {
+  const headers = await getWriteHeaders(auth);
+  const response = await fetch(LIKE_TWEET_URL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      variables: { tweet_id: tweetId }
+    })
+  });
+  await updateCookieJar(auth.cookieJar(), response.headers);
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(
+      `likeTweet failed (${response.status}): ${errText.slice(0, 300)}`
+    );
+  }
+}
+const RETWEET_URL = "https://x.com/i/api/graphql/ojPdsZsimiJrUGLR1sjUtA/CreateRetweet";
+async function retweet(tweetId, auth) {
+  const headers = await getWriteHeaders(auth);
+  const response = await fetch(RETWEET_URL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      variables: { tweet_id: tweetId, dark_request: false }
+    })
+  });
+  await updateCookieJar(auth.cookieJar(), response.headers);
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(
+      `retweet failed (${response.status}): ${errText.slice(0, 300)}`
+    );
+  }
+}
+const FOLLOW_URL = "https://api.x.com/1.1/friendships/create.json";
+async function followUser(username, auth) {
+  if (!await auth.isLoggedIn()) {
+    throw new Error("Must be logged in to follow users");
+  }
+  const userIdResult = await getUserIdByScreenName(username, auth);
+  if (!userIdResult.success) {
+    throw new Error(
+      `Failed to resolve @${username}: ${userIdResult.err.message}`
+    );
+  }
+  const headers = await getWriteHeaders(
+    auth,
+    "application/x-www-form-urlencoded"
+  );
+  headers.set("referer", `https://x.com/${username}`);
+  const body = new URLSearchParams({
+    include_profile_interstitial_type: "1",
+    skip_status: "true",
+    user_id: userIdResult.value
+  });
+  const response = await fetch(FOLLOW_URL, {
+    method: "POST",
+    headers,
+    body: body.toString()
+  });
+  await updateCookieJar(auth.cookieJar(), response.headers);
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(
+      `followUser failed (${response.status}): ${errText.slice(0, 300)}`
+    );
+  }
+}
+const UNLIKE_TWEET_URL = "https://x.com/i/api/graphql/ZYKSe-w7KEslx3JhSIk5LA/UnfavoriteTweet";
+async function unlikeTweet(tweetId, auth) {
+  const headers = await getWriteHeaders(auth);
+  const response = await fetch(UNLIKE_TWEET_URL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      variables: { tweet_id: tweetId }
+    })
+  });
+  await updateCookieJar(auth.cookieJar(), response.headers);
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(
+      `unlikeTweet failed (${response.status}): ${errText.slice(0, 300)}`
+    );
+  }
+}
+const UNDO_RETWEET_URL = "https://x.com/i/api/graphql/iQtK4dl5hBmXewYZuEOKVw/DeleteRetweet";
+async function undoRetweet(tweetId, auth) {
+  const headers = await getWriteHeaders(auth);
+  const response = await fetch(UNDO_RETWEET_URL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      variables: { source_tweet_id: tweetId, dark_request: false }
+    })
+  });
+  await updateCookieJar(auth.cookieJar(), response.headers);
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(
+      `undoRetweet failed (${response.status}): ${errText.slice(0, 300)}`
+    );
+  }
+}
+const DELETE_TWEET_URL = "https://x.com/i/api/graphql/VaenaVgh5q5ih7kvyVjgtg/DeleteTweet";
+async function deleteTweet(tweetId, auth) {
+  const headers = await getWriteHeaders(auth);
+  const response = await fetch(DELETE_TWEET_URL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      variables: { tweet_id: tweetId, dark_request: false }
+    })
+  });
+  await updateCookieJar(auth.cookieJar(), response.headers);
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(
+      `deleteTweet failed (${response.status}): ${errText.slice(0, 300)}`
+    );
+  }
+}
+const UNFOLLOW_URL = "https://api.x.com/1.1/friendships/destroy.json";
+async function unfollowUser(username, auth) {
+  if (!await auth.isLoggedIn()) {
+    throw new Error("Must be logged in to unfollow users");
+  }
+  const userIdResult = await getUserIdByScreenName(username, auth);
+  if (!userIdResult.success) {
+    throw new Error(
+      `Failed to resolve @${username}: ${userIdResult.err.message}`
+    );
+  }
+  const headers = await getWriteHeaders(
+    auth,
+    "application/x-www-form-urlencoded"
+  );
+  headers.set("referer", `https://x.com/${username}`);
+  const body = new URLSearchParams({
+    include_profile_interstitial_type: "1",
+    skip_status: "true",
+    user_id: userIdResult.value
+  });
+  const response = await fetch(UNFOLLOW_URL, {
+    method: "POST",
+    headers,
+    body: body.toString()
+  });
+  await updateCookieJar(auth.cookieJar(), response.headers);
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(
+      `unfollowUser failed (${response.status}): ${errText.slice(0, 300)}`
+    );
+  }
+}
+async function quoteTweet(text, quotedTweetId, quotedTweetUsername, auth) {
+  const headers = await getWriteHeaders(auth);
+  const variables = {
+    tweet_text: text,
+    dark_request: false,
+    media: {
+      media_entities: [],
+      possibly_sensitive: false
+    },
+    semantic_annotation_ids: [],
+    attachment_url: `https://x.com/${quotedTweetUsername}/status/${quotedTweetId}`
+  };
+  const response = await fetch(CREATE_TWEET_URL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      variables,
+      features: CREATE_TWEET_FEATURES,
+      fieldToggles: {}
+    })
+  });
+  await updateCookieJar(auth.cookieJar(), response.headers);
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(
+      `quoteTweet failed (${response.status}): ${errText.slice(0, 500)}`
+    );
+  }
+  const data = await response.json();
+  const tweetResult = data?.data?.create_tweet?.tweet_results?.result;
+  const tweetId = tweetResult?.rest_id ?? tweetResult?.tweet?.rest_id;
+  return { tweetId, response };
+}
+const BOOKMARK_URL = "https://x.com/i/api/graphql/aoDbu3RHznuiSkQ9aNM67Q/CreateBookmark";
+async function bookmarkTweet(tweetId, auth) {
+  const headers = await getWriteHeaders(auth);
+  const response = await fetch(BOOKMARK_URL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      variables: { tweet_id: tweetId }
+    })
+  });
+  await updateCookieJar(auth.cookieJar(), response.headers);
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(
+      `bookmarkTweet failed (${response.status}): ${errText.slice(0, 300)}`
+    );
+  }
+}
+const UNBOOKMARK_URL = "https://x.com/i/api/graphql/Wlmlj2-xISyz1NhUWsBPCA/DeleteBookmark";
+async function unbookmarkTweet(tweetId, auth) {
+  const headers = await getWriteHeaders(auth);
+  const response = await fetch(UNBOOKMARK_URL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      variables: { tweet_id: tweetId }
+    })
+  });
+  await updateCookieJar(auth.cookieJar(), response.headers);
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(
+      `unbookmarkTweet failed (${response.status}): ${errText.slice(0, 300)}`
+    );
+  }
+}
+
 const log = debug("twitter-scraper:scraper");
 const twUrl = "https://x.com";
 class Scraper {
@@ -3584,8 +4185,15 @@ class Scraper {
   constructor(options) {
     this.options = options;
     this.subtaskHandlers = /* @__PURE__ */ new Map();
+    this._logger = new ScraperLogger(options?.logging?.transports);
     this.token = bearerToken;
     this.useGuestAuth();
+  }
+  /**
+   * The structured logger for this scraper instance.
+   */
+  get logger() {
+    return this._logger;
   }
   /**
    * Registers a subtask handler for the given subtask ID. This
@@ -3647,7 +4255,11 @@ class Scraper {
    * @returns An {@link AsyncGenerator} of tweets matching the provided filters.
    */
   searchTweets(query, maxTweets, searchMode = SearchMode.Top) {
-    return searchTweets(query, maxTweets, searchMode, this.auth);
+    return this.instrumentGenerator(
+      "searchTweets",
+      { query, maxTweets, searchMode },
+      searchTweets(query, maxTweets, searchMode, this.auth)
+    );
   }
   /**
    * Fetches profiles from Twitter.
@@ -3656,7 +4268,11 @@ class Scraper {
    * @returns An {@link AsyncGenerator} of tweets matching the provided filter(s).
    */
   searchProfiles(query, maxProfiles) {
-    return searchProfiles(query, maxProfiles, this.auth);
+    return this.instrumentGenerator(
+      "searchProfiles",
+      { query, maxProfiles },
+      searchProfiles(query, maxProfiles, this.auth)
+    );
   }
   /**
    * Fetches tweets from Twitter.
@@ -3707,7 +4323,11 @@ class Scraper {
    * @returns An {@link AsyncGenerator} of following profiles for the provided user.
    */
   getFollowing(userId, maxProfiles) {
-    return getFollowing(userId, maxProfiles, this.auth);
+    return this.instrumentGenerator(
+      "getFollowing",
+      { userId, maxProfiles },
+      getFollowing(userId, maxProfiles, this.auth)
+    );
   }
   /**
    * Fetch the profiles that follow a user
@@ -3716,7 +4336,11 @@ class Scraper {
    * @returns An {@link AsyncGenerator} of profiles following the provided user.
    */
   getFollowers(userId, maxProfiles) {
-    return getFollowers(userId, maxProfiles, this.auth);
+    return this.instrumentGenerator(
+      "getFollowers",
+      { userId, maxProfiles },
+      getFollowers(userId, maxProfiles, this.auth)
+    );
   }
   /**
    * Fetches following profiles from Twitter.
@@ -3752,7 +4376,11 @@ class Scraper {
    * @returns An {@link AsyncGenerator} of tweets from the provided user.
    */
   getTweets(user, maxTweets = 200) {
-    return getTweets(user, maxTweets, this.auth);
+    return this.instrumentGenerator(
+      "getTweets",
+      { user, maxTweets },
+      getTweets(user, maxTweets, this.auth)
+    );
   }
   /**
    * Fetches liked tweets from a Twitter user. Requires authentication.
@@ -3761,7 +4389,11 @@ class Scraper {
    * @returns An {@link AsyncGenerator} of liked tweets from the provided user.
    */
   getLikedTweets(user, maxTweets = 200) {
-    return getLikedTweets(user, maxTweets, this.auth);
+    return this.instrumentGenerator(
+      "getLikedTweets",
+      { user, maxTweets },
+      getLikedTweets(user, maxTweets, this.auth)
+    );
   }
   /**
    * Fetches tweets from a Twitter user using their ID.
@@ -3770,7 +4402,11 @@ class Scraper {
    * @returns An {@link AsyncGenerator} of tweets from the provided user.
    */
   getTweetsByUserId(userId, maxTweets = 200) {
-    return getTweetsByUserId(userId, maxTweets, this.auth);
+    return this.instrumentGenerator(
+      "getTweetsByUserId",
+      { userId, maxTweets },
+      getTweetsByUserId(userId, maxTweets, this.auth)
+    );
   }
   /**
    * Fetches tweets and replies from a Twitter user.
@@ -3779,7 +4415,11 @@ class Scraper {
    * @returns An {@link AsyncGenerator} of tweets from the provided user.
    */
   getTweetsAndReplies(user, maxTweets = 200) {
-    return getTweetsAndReplies(user, maxTweets, this.auth);
+    return this.instrumentGenerator(
+      "getTweetsAndReplies",
+      { user, maxTweets },
+      getTweetsAndReplies(user, maxTweets, this.auth)
+    );
   }
   /**
    * Fetches tweets and replies from a Twitter user using their ID.
@@ -3788,7 +4428,11 @@ class Scraper {
    * @returns An {@link AsyncGenerator} of tweets from the provided user.
    */
   getTweetsAndRepliesByUserId(userId, maxTweets = 200) {
-    return getTweetsAndRepliesByUserId(userId, maxTweets, this.auth);
+    return this.instrumentGenerator(
+      "getTweetsAndRepliesByUserId",
+      { userId, maxTweets },
+      getTweetsAndRepliesByUserId(userId, maxTweets, this.auth)
+    );
   }
   /**
    * Fetches the first tweet matching the given query.
@@ -3876,7 +4520,11 @@ class Scraper {
    * @returns An {@link AsyncGenerator} of messages from the provided conversation.
    */
   getDmMessages(conversationId, maxMessages = 20, cursor) {
-    return getDmMessages(conversationId, maxMessages, cursor, this.auth);
+    return this.instrumentGenerator(
+      "getDmMessages",
+      { conversationId, maxMessages },
+      getDmMessages(conversationId, maxMessages, cursor, this.auth)
+    );
   }
   /**
    * Retrieves a list of direct message conversations for a specific user based on their user ID.
@@ -3924,6 +4572,11 @@ class Scraper {
     await this.auth.logout();
     await this.authTrends.logout();
     this.useGuestAuth();
+    this._logger.emit({
+      event: "auth.logout",
+      level: "info",
+      detail: "Logged out"
+    });
   }
   /**
    * Retrieves all cookies for the current session.
@@ -3961,6 +4614,11 @@ class Scraper {
     }
     this.auth = userAuth;
     this.authTrends = userAuth;
+    this._logger.emit({
+      event: "auth.cookies_set",
+      level: "info",
+      detail: `Set ${cookies.length} cookies`
+    });
     const isLoggedIn = await userAuth.isLoggedIn();
     if (!isLoggedIn) {
       const cookieString = await userAuth.cookieJar().getCookies(twUrl).then((c) => c.map((cookie) => cookie.key));
@@ -4004,11 +4662,43 @@ class Scraper {
     );
     return this;
   }
+  async *instrumentGenerator(operation, params, generator) {
+    this._logger.emit({
+      event: "scrape.start",
+      level: "info",
+      operation,
+      params
+    });
+    const startTime = Date.now();
+    let totalItems = 0;
+    let errors = 0;
+    try {
+      for await (const item of generator) {
+        totalItems++;
+        yield item;
+      }
+    } catch (err) {
+      errors++;
+      throw err;
+    } finally {
+      this._logger.emit({
+        event: "scrape.complete",
+        level: "info",
+        operation,
+        totalItems,
+        totalPages: 0,
+        // Page tracking requires instrumentation inside timeline-async.ts
+        durationMs: Date.now() - startTime,
+        errors
+      });
+    }
+  }
   getAuthOptions() {
     return {
       fetch: this.options?.fetch,
       transform: this.options?.transform,
       rateLimitStrategy: this.options?.rateLimitStrategy,
+      logger: this._logger,
       experimental: {
         xClientTransactionId: this.options?.experimental?.xClientTransactionId,
         xpff: this.options?.experimental?.xpff,
@@ -4023,7 +4713,220 @@ class Scraper {
     }
     return res.value;
   }
+  // ── Write operations ──────────────────────────────────────────────────
+  /**
+   * Send a tweet or reply to a tweet.
+   * @param text The tweet text
+   * @param replyToTweetId Optional tweet ID to reply to
+   */
+  async sendTweet(text, replyToTweetId) {
+    return sendTweet(text, this.auth, replyToTweetId);
+  }
+  /**
+   * Like a tweet by ID.
+   */
+  async likeTweet(tweetId) {
+    return likeTweet(tweetId, this.auth);
+  }
+  /**
+   * Retweet a tweet by ID.
+   */
+  async retweet(tweetId) {
+    return retweet(tweetId, this.auth);
+  }
+  /**
+   * Follow a user by username (without @).
+   */
+  async followUser(username) {
+    return followUser(username, this.auth);
+  }
+  /**
+   * Unlike a previously liked tweet.
+   * @param tweetId The tweet ID to unlike
+   */
+  async unlikeTweet(tweetId) {
+    await unlikeTweet(tweetId, this.auth);
+  }
+  /**
+   * Undo a retweet.
+   * @param tweetId The tweet ID to un-retweet
+   */
+  async undoRetweet(tweetId) {
+    await undoRetweet(tweetId, this.auth);
+  }
+  /**
+   * Delete a tweet.
+   * @param tweetId The tweet ID to delete
+   */
+  async deleteTweet(tweetId) {
+    await deleteTweet(tweetId, this.auth);
+  }
+  /**
+   * Unfollow a user by username (without @).
+   * @param username The username to unfollow
+   */
+  async unfollowUser(username) {
+    await unfollowUser(username, this.auth);
+  }
+  /**
+   * Quote-tweet another tweet.
+   * @param text The commentary text for the quote tweet
+   * @param quotedTweetId The tweet ID being quoted
+   * @param quotedTweetUsername The username of the quoted tweet's author
+   */
+  async quoteTweet(text, quotedTweetId, quotedTweetUsername) {
+    return quoteTweet(text, quotedTweetId, quotedTweetUsername, this.auth);
+  }
+  /**
+   * Bookmark a tweet.
+   * @param tweetId The tweet ID to bookmark
+   */
+  async bookmarkTweet(tweetId) {
+    await bookmarkTweet(tweetId, this.auth);
+  }
+  /**
+   * Remove a bookmark from a tweet.
+   * @param tweetId The tweet ID to unbookmark
+   */
+  async unbookmarkTweet(tweetId) {
+    await unbookmarkTweet(tweetId, this.auth);
+  }
 }
 
-export { ApiError, AuthenticationError, ErrorRateLimitStrategy, Scraper, SearchMode, WaitingRateLimitStrategy, randomizeBrowserProfile };
+const LOG_LEVEL_PRIORITY = {
+  debug: 0,
+  info: 1,
+  warn: 2,
+  error: 3
+};
+
+const ANSI_COLORS = {
+  debug: "\x1B[90m",
+  // gray
+  info: "\x1B[36m",
+  // cyan
+  warn: "\x1B[33m",
+  // yellow
+  error: "\x1B[31m"
+  // red
+};
+const ANSI_RESET = "\x1B[0m";
+class ConsoleTransport {
+  constructor(options = {}) {
+    this.name = "console";
+    this.minLevel = options.minLevel ?? "info";
+    this.colorize = options.colorize ?? true;
+    this.timestamps = options.timestamps ?? true;
+  }
+  write(event) {
+    if (LOG_LEVEL_PRIORITY[event.level] < LOG_LEVEL_PRIORITY[this.minLevel]) {
+      return;
+    }
+    const detail = this.formatDetail(event);
+    const levelTag = event.level.toUpperCase().padEnd(5);
+    const eventTag = event.event;
+    let line;
+    if (this.timestamps) {
+      line = `[${event.timestamp}] ${levelTag} [${eventTag}] ${detail}`;
+    } else {
+      line = `${levelTag} [${eventTag}] ${detail}`;
+    }
+    if (this.colorize) {
+      const color = ANSI_COLORS[event.level];
+      line = `${color}${line}${ANSI_RESET}`;
+    }
+    if (event.level === "error") {
+      console.error(line);
+    } else if (event.level === "warn") {
+      console.warn(line);
+    } else {
+      console.log(line);
+    }
+  }
+  formatDetail(event) {
+    switch (event.event) {
+      case "http.request":
+        return `\u2192 ${event.method} ${event.url}`;
+      case "http.response":
+        return `\u2190 ${event.statusCode} ${event.url} (${event.durationMs}ms)`;
+      case "http.rate_limit":
+        return `\u26A0 Rate limit on ${event.endpoint}, waiting ${event.waitMs}ms`;
+      case "auth.login_start":
+      case "auth.login_step":
+      case "auth.login_success":
+      case "auth.login_failure":
+      case "auth.logout":
+      case "auth.guest_token":
+      case "auth.cookies_set": {
+        const authType = event.event.replace("auth.", "").toUpperCase();
+        return `\u{1F511} ${authType}: ${event.detail ?? ""}`;
+      }
+      case "scrape.start":
+        return `\u25B6 ${event.operation} ${JSON.stringify(event.params)}`;
+      case "scrape.page":
+        return `  page ${event.pageNumber}: ${event.itemCount} items (${event.cumulativeCount} total)`;
+      case "scrape.complete":
+        return `\u2713 ${event.operation}: ${event.totalItems} items in ${event.totalPages} pages (${event.durationMs}ms)`;
+      case "parse.success":
+      case "parse.failure": {
+        const outcome = event.event === "parse.success" ? "ok" : "failed";
+        return `parse ${event.parser}: ${event.count ?? 1} ${outcome}`;
+      }
+      case "error":
+        return `\u2717 ${event.code ?? "UNKNOWN"}: ${event.message}`;
+      default:
+        return "";
+    }
+  }
+}
+class JsonLinesTransport {
+  constructor(options) {
+    this.name = "jsonlines";
+    this.writeLine = options.writeLine;
+    this.minLevel = options.minLevel ?? "debug";
+    this.filter = options.filter;
+  }
+  write(event) {
+    if (LOG_LEVEL_PRIORITY[event.level] < LOG_LEVEL_PRIORITY[this.minLevel]) {
+      return;
+    }
+    if (this.filter && !this.filter(event)) {
+      return;
+    }
+    this.writeLine(JSON.stringify(event));
+  }
+}
+class CallbackTransport {
+  constructor(callback) {
+    this.callback = callback;
+    this.name = "callback";
+  }
+  write(event) {
+    this.callback(event);
+  }
+}
+
+class ReportTransport {
+  constructor(options) {
+    this.options = options;
+    this.name = "report";
+    this.events = [];
+    {
+      throw new Error(
+        "ReportTransport requires Node.js for file I/O. Use ConsoleTransport or JsonLinesTransport in browser environments."
+      );
+    }
+  }
+  write(event) {
+    this.events.push(event);
+  }
+  async flush() {
+    if (this.events.length === 0) {
+      return;
+    }
+    this.events = [];
+  }
+}
+
+export { ApiError, AuthenticationError, CallbackTransport, ConsoleTransport, ErrorRateLimitStrategy, JsonLinesTransport, LOG_LEVEL_PRIORITY, ReportTransport, Scraper, ScraperLogger, SearchMode, WaitingRateLimitStrategy, bookmarkTweet, deleteTweet, followUser, likeTweet, quoteTweet, randomizeBrowserProfile, retweet, sendTweet, unbookmarkTweet, undoRetweet, unfollowUser, unlikeTweet };
 //# sourceMappingURL=index.mjs.map

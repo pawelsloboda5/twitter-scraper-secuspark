@@ -1,7 +1,8 @@
 import * as _sinclair_typebox from '@sinclair/typebox';
 import { Static } from '@sinclair/typebox';
-import { Cookie } from 'tough-cookie';
+import { CookieJar, Cookie } from 'tough-cookie';
 import fetch from 'cross-fetch';
+import { Headers } from 'headers-polyfill';
 
 type FetchParameters = [input: RequestInfo | URL, init?: RequestInit];
 
@@ -130,6 +131,236 @@ declare class WaitingRateLimitStrategy implements RateLimitStrategy {
  */
 declare class ErrorRateLimitStrategy implements RateLimitStrategy {
     onRateLimit({ response: res }: RateLimitEvent): Promise<void>;
+}
+
+/**
+ * Structured event type definitions for the scraper logging system.
+ *
+ * Each event represents a typed, structured log entry that can be
+ * serialized to JSON. Events use a discriminated union on the `event`
+ * field so consumers can narrow the type via a simple switch/check.
+ */
+type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+/**
+ * Priority ordering for log levels, used by transports to filter events
+ * at or above a configured minimum level.
+ */
+declare const LOG_LEVEL_PRIORITY: Record<LogLevel, number>;
+interface ScraperEventBase {
+    /** ISO 8601 timestamp */
+    timestamp: string;
+    /** Scraper instance ID (hex string) */
+    sessionId: string;
+    /** Discriminator for the union type */
+    event: string;
+    /** Severity level */
+    level: LogLevel;
+}
+interface HttpRequestEvent extends ScraperEventBase {
+    event: 'http.request';
+    level: 'debug';
+    method: 'GET' | 'POST';
+    url: string;
+    /** GraphQL operation name or REST path */
+    endpoint: string;
+}
+interface HttpResponseEvent extends ScraperEventBase {
+    event: 'http.response';
+    level: 'debug' | 'info' | 'warn';
+    method: 'GET' | 'POST';
+    url: string;
+    endpoint: string;
+    statusCode: number;
+    durationMs: number;
+    rateLimitRemaining?: number;
+    rateLimitReset?: number;
+    rateLimitLimit?: number;
+}
+interface HttpRateLimitEvent extends ScraperEventBase {
+    event: 'http.rate_limit';
+    level: 'warn';
+    endpoint: string;
+    rateLimitLimit: number;
+    rateLimitRemaining: number;
+    rateLimitReset: number;
+    /** How long the caller will wait before retrying (ms) */
+    waitMs: number;
+}
+interface AuthEvent extends ScraperEventBase {
+    event: 'auth.login_start' | 'auth.login_step' | 'auth.login_success' | 'auth.login_failure' | 'auth.logout' | 'auth.guest_token' | 'auth.cookies_set';
+    level: 'debug' | 'info' | 'warn' | 'error';
+    detail?: string;
+    subtaskId?: string;
+    stepIndex?: number;
+}
+interface ScrapeStartEvent extends ScraperEventBase {
+    event: 'scrape.start';
+    level: 'info';
+    /** Operation name, e.g. 'searchTweets', 'getProfile' */
+    operation: string;
+    params: Record<string, unknown>;
+}
+interface ScrapePageEvent extends ScraperEventBase {
+    event: 'scrape.page';
+    level: 'debug';
+    operation: string;
+    pageNumber: number;
+    itemCount: number;
+    cursor?: string;
+    cumulativeCount: number;
+}
+interface ScrapeCompleteEvent extends ScraperEventBase {
+    event: 'scrape.complete';
+    level: 'info';
+    operation: string;
+    totalItems: number;
+    totalPages: number;
+    durationMs: number;
+    errors: number;
+}
+interface ParseEvent extends ScraperEventBase {
+    event: 'parse.success' | 'parse.failure';
+    level: 'debug' | 'warn';
+    /** Name of the parser that produced this event */
+    parser: string;
+    entityId?: string;
+    error?: string;
+    count?: number;
+}
+interface ScraperErrorEvent extends ScraperEventBase {
+    event: 'error';
+    level: 'error';
+    code?: 'API_ERROR' | 'AUTH_ERROR' | 'PARSE_ERROR' | 'NETWORK_ERROR';
+    statusCode?: number;
+    message: string;
+    endpoint?: string;
+    stack?: string;
+}
+type ScraperEvent = HttpRequestEvent | HttpResponseEvent | HttpRateLimitEvent | AuthEvent | ScrapeStartEvent | ScrapePageEvent | ScrapeCompleteEvent | ParseEvent | ScraperErrorEvent;
+
+/**
+ * Distributive Omit that preserves discriminated union members.
+ * Standard `Omit` collapses the union into a single flat type, which
+ * breaks excess-property checking on individual event objects.
+ */
+type DistributiveOmit<T, K extends keyof any> = T extends any ? Omit<T, K> : never;
+/** The shape callers pass to `emit()` -- every event minus the auto-stamped fields. */
+type ScraperEventInput = DistributiveOmit<ScraperEvent, 'timestamp' | 'sessionId'>;
+interface LogTransport {
+    name: string;
+    write(event: ScraperEvent): void;
+    flush?(): Promise<void>;
+    close?(): Promise<void>;
+}
+interface EndpointMetrics {
+    endpoint: string;
+    requestCount: number;
+    totalDurationMs: number;
+    minDurationMs: number;
+    maxDurationMs: number;
+    errorCount: number;
+    rateLimitCount: number;
+    lastStatus: number;
+}
+interface ScrapeOperationMetrics {
+    operation: string;
+    totalItems: number;
+    totalPages: number;
+    durationMs: number;
+    errors: number;
+}
+interface SessionMetrics {
+    sessionId: string;
+    startTime: string;
+    endTime?: string;
+    totalRequests: number;
+    successfulRequests: number;
+    failedRequests: number;
+    rateLimitsHit: number;
+    totalRateLimitWaitMs: number;
+    requestsByEndpoint: Record<string, EndpointMetrics>;
+    scrapeOperations: ScrapeOperationMetrics[];
+    parseSuccessCount: number;
+    parseFailureCount: number;
+    errors: {
+        timestamp: string;
+        code: string;
+        message: string;
+        endpoint?: string;
+    }[];
+}
+declare class ScraperLogger {
+    readonly sessionId: string;
+    private transports;
+    private metrics;
+    constructor(transports?: LogTransport[]);
+    emit(event: ScraperEventInput): void;
+    addTransport(transport: LogTransport): void;
+    removeTransport(transport: LogTransport): void;
+    getMetrics(): SessionMetrics;
+    flush(): Promise<void>;
+    close(): Promise<void>;
+    get hasTransports(): boolean;
+    private getOrCreateEndpoint;
+    private updateMetrics;
+}
+
+interface TwitterAuth {
+    fetch: typeof fetch;
+    /** Optional structured logger for emitting scraper events. */
+    logger?: ScraperLogger;
+    /**
+     * How to behave when being rate-limited.
+     * @param event The event information.
+     */
+    onRateLimit(event: RateLimitEvent): Promise<void>;
+    /**
+     * Returns the current cookie jar.
+     */
+    cookieJar(): CookieJar;
+    /**
+     * Returns the current cookies.
+     */
+    getCookies(): Promise<Cookie[]>;
+    /**
+     * Returns if a user is logged-in to Twitter through this instance.
+     * @returns `true` if a user is logged-in; otherwise `false`.
+     */
+    isLoggedIn(): Promise<boolean>;
+    /**
+     * Logs into a Twitter account.
+     * @param username The username to log in with.
+     * @param password The password to log in with.
+     * @param email The email to log in with, if you have email confirmation enabled.
+     * @param twoFactorSecret The secret to generate two factor authentication tokens with, if you have two factor authentication enabled.
+     */
+    login(username: string, password: string, email?: string, twoFactorSecret?: string): Promise<void>;
+    /**
+     * Logs out of the current session.
+     */
+    logout(): Promise<void>;
+    /**
+     * Deletes the current guest token token.
+     */
+    deleteToken(): void;
+    /**
+     * Returns if the authentication state has a token.
+     * @returns `true` if the authentication state has a token; `false` otherwise.
+     */
+    hasToken(): boolean;
+    /**
+     * Returns the time that authentication was performed.
+     * @returns The time at which the authentication token was created, or `null` if it hasn't been created yet.
+     */
+    authenticatedAt(): Date | null;
+    /**
+     * Installs the authentication information into a headers-like object. If needed, the
+     * authentication token will be updated from the API automatically.
+     * @param headers A Headers instance representing a request's headers.
+     * @param _url The URL being requested (currently unused, reserved for future use).
+     * @param bearerTokenOverride Optional bearer token to use instead of the default one.
+     */
+    installTo(headers: Headers, _url: string, bearerTokenOverride?: string): Promise<void>;
 }
 
 declare class ApiError extends Error {
@@ -746,6 +977,80 @@ declare enum SearchMode {
     Users = 4
 }
 
+interface SendTweetResult {
+    tweetId?: string;
+    response: Response;
+}
+/**
+ * Send a tweet or reply to a tweet.
+ * @param text The tweet text
+ * @param auth Authenticated TwitterAuth instance
+ * @param replyToTweetId Optional tweet ID to reply to
+ */
+declare function sendTweet(text: string, auth: TwitterAuth, replyToTweetId?: string): Promise<SendTweetResult>;
+/**
+ * Like a tweet.
+ * @param tweetId The tweet ID to like
+ * @param auth Authenticated TwitterAuth instance
+ */
+declare function likeTweet(tweetId: string, auth: TwitterAuth): Promise<void>;
+/**
+ * Retweet a tweet.
+ * @param tweetId The tweet ID to retweet
+ * @param auth Authenticated TwitterAuth instance
+ */
+declare function retweet(tweetId: string, auth: TwitterAuth): Promise<void>;
+/**
+ * Follow a user by username.
+ * @param username The username (without @) to follow
+ * @param auth Authenticated TwitterAuth instance
+ */
+declare function followUser(username: string, auth: TwitterAuth): Promise<void>;
+/**
+ * Unlike a previously liked tweet.
+ * @param tweetId The tweet ID to unlike
+ * @param auth Authenticated TwitterAuth instance
+ */
+declare function unlikeTweet(tweetId: string, auth: TwitterAuth): Promise<void>;
+/**
+ * Undo a retweet.
+ * @param tweetId The tweet ID to un-retweet
+ * @param auth Authenticated TwitterAuth instance
+ */
+declare function undoRetweet(tweetId: string, auth: TwitterAuth): Promise<void>;
+/**
+ * Delete a tweet.
+ * @param tweetId The tweet ID to delete
+ * @param auth Authenticated TwitterAuth instance
+ */
+declare function deleteTweet(tweetId: string, auth: TwitterAuth): Promise<void>;
+/**
+ * Unfollow a user by username.
+ * @param username The username (without @) to unfollow
+ * @param auth Authenticated TwitterAuth instance
+ */
+declare function unfollowUser(username: string, auth: TwitterAuth): Promise<void>;
+/**
+ * Quote-tweet another tweet.
+ * @param text The commentary text for the quote tweet
+ * @param quotedTweetId The tweet ID being quoted
+ * @param quotedTweetUsername The username of the quoted tweet's author
+ * @param auth Authenticated TwitterAuth instance
+ */
+declare function quoteTweet(text: string, quotedTweetId: string, quotedTweetUsername: string, auth: TwitterAuth): Promise<SendTweetResult>;
+/**
+ * Bookmark a tweet.
+ * @param tweetId The tweet ID to bookmark
+ * @param auth Authenticated TwitterAuth instance
+ */
+declare function bookmarkTweet(tweetId: string, auth: TwitterAuth): Promise<void>;
+/**
+ * Remove a bookmark from a tweet.
+ * @param tweetId The tweet ID to unbookmark
+ * @param auth Authenticated TwitterAuth instance
+ */
+declare function unbookmarkTweet(tweetId: string, auth: TwitterAuth): Promise<void>;
+
 interface ScraperOptions {
     /**
      * An alternative fetch function to use instead of the default fetch function. This may be useful
@@ -761,6 +1066,12 @@ interface ScraperOptions {
      * A handling strategy for rate limits (HTTP 429).
      */
     rateLimitStrategy: RateLimitStrategy;
+    /**
+     * Logging configuration. When omitted, no structured logging occurs.
+     */
+    logging?: {
+        transports: LogTransport[];
+    };
     /**
      * Experimental features that may be added, changed, or removed at any time. Use with caution.
      */
@@ -796,6 +1107,7 @@ declare class Scraper {
     private auth;
     private authTrends;
     private token;
+    private _logger;
     private readonly subtaskHandlers;
     /**
      * Creates a new Scraper object.
@@ -803,6 +1115,10 @@ declare class Scraper {
      * - Reusing Scraper objects is recommended to minimize the time spent authenticating unnecessarily.
      */
     constructor(options?: Partial<ScraperOptions> | undefined);
+    /**
+     * The structured logger for this scraper instance.
+     */
+    get logger(): ScraperLogger;
     /**
      * Registers a subtask handler for the given subtask ID. This
      * will override any existing handler for the same subtask.
@@ -1071,8 +1387,133 @@ declare class Scraper {
      * @returns This scraper instance.
      */
     withXCsrfToken(_token: string): Scraper;
+    private instrumentGenerator;
     private getAuthOptions;
     private handleResponse;
+    /**
+     * Send a tweet or reply to a tweet.
+     * @param text The tweet text
+     * @param replyToTweetId Optional tweet ID to reply to
+     */
+    sendTweet(text: string, replyToTweetId?: string): Promise<SendTweetResult>;
+    /**
+     * Like a tweet by ID.
+     */
+    likeTweet(tweetId: string): Promise<void>;
+    /**
+     * Retweet a tweet by ID.
+     */
+    retweet(tweetId: string): Promise<void>;
+    /**
+     * Follow a user by username (without @).
+     */
+    followUser(username: string): Promise<void>;
+    /**
+     * Unlike a previously liked tweet.
+     * @param tweetId The tweet ID to unlike
+     */
+    unlikeTweet(tweetId: string): Promise<void>;
+    /**
+     * Undo a retweet.
+     * @param tweetId The tweet ID to un-retweet
+     */
+    undoRetweet(tweetId: string): Promise<void>;
+    /**
+     * Delete a tweet.
+     * @param tweetId The tweet ID to delete
+     */
+    deleteTweet(tweetId: string): Promise<void>;
+    /**
+     * Unfollow a user by username (without @).
+     * @param username The username to unfollow
+     */
+    unfollowUser(username: string): Promise<void>;
+    /**
+     * Quote-tweet another tweet.
+     * @param text The commentary text for the quote tweet
+     * @param quotedTweetId The tweet ID being quoted
+     * @param quotedTweetUsername The username of the quoted tweet's author
+     */
+    quoteTweet(text: string, quotedTweetId: string, quotedTweetUsername: string): Promise<SendTweetResult>;
+    /**
+     * Bookmark a tweet.
+     * @param tweetId The tweet ID to bookmark
+     */
+    bookmarkTweet(tweetId: string): Promise<void>;
+    /**
+     * Remove a bookmark from a tweet.
+     * @param tweetId The tweet ID to unbookmark
+     */
+    unbookmarkTweet(tweetId: string): Promise<void>;
 }
 
-export { ApiError, AuthenticationError, type BrowserProfile, type DmConversation, type DmConversationResponse, type DmConversationTimeline, type DmInbox, type DmInboxResponse, type DmInboxTimelines, type DmMessage, type DmMessageData, type DmMessageEntities, type DmMessageEntry, type DmMessageUrl, type DmParticipant, type DmReaction, type DmStatus, type DmTimelineState, type DmWelcomeMessage, ErrorRateLimitStrategy, type FetchParameters, type FetchTransformOptions, type FlowSubtaskHandler, type FlowSubtaskHandlerApi, type FlowTokenResult, type FlowTokenResultError, type FlowTokenResultSuccess, type Mention, type Photo, type PlaceRaw, type Profile, type QueryProfilesResponse, type QueryTweetsResponse, type RateLimitEvent, type RateLimitStrategy, Scraper, type ScraperOptions, SearchMode, type Tweet, type TweetQuery, type TwitterApiErrorExtensions, type TwitterApiErrorPosition, type TwitterApiErrorRaw, type TwitterApiErrorTraceInfo, type TwitterUserAuthCredentials, type TwitterUserAuthFlowInitRequest, type TwitterUserAuthFlowRequest, type TwitterUserAuthFlowResponse, type TwitterUserAuthFlowSubtaskRequest, type Video, WaitingRateLimitStrategy, randomizeBrowserProfile };
+/**
+ * Built-in log transports for the scraper logging system.
+ *
+ * All transports in this file are browser-safe — no Node.js imports.
+ */
+
+interface ConsoleTransportOptions {
+    /** Minimum severity level to display (default: 'info') */
+    minLevel?: LogLevel;
+    /** Whether to use ANSI color codes (default: true) */
+    colorize?: boolean;
+    /** Whether to prefix output with timestamps (default: true) */
+    timestamps?: boolean;
+}
+declare class ConsoleTransport implements LogTransport {
+    name: string;
+    private minLevel;
+    private colorize;
+    private timestamps;
+    constructor(options?: ConsoleTransportOptions);
+    write(event: ScraperEvent): void;
+    private formatDetail;
+}
+interface JsonLinesTransportOptions {
+    /** Called for each JSON line. Consumers can write to file, stdout, etc. */
+    writeLine: (line: string) => void;
+    /** Minimum severity level to emit (default: 'debug') */
+    minLevel?: LogLevel;
+    /** Optional predicate to filter events */
+    filter?: (event: ScraperEvent) => boolean;
+}
+declare class JsonLinesTransport implements LogTransport {
+    name: string;
+    private writeLine;
+    private minLevel;
+    private filter?;
+    constructor(options: JsonLinesTransportOptions);
+    write(event: ScraperEvent): void;
+}
+declare class CallbackTransport implements LogTransport {
+    private callback;
+    name: string;
+    constructor(callback: (event: ScraperEvent) => void);
+    write(event: ScraperEvent): void;
+}
+
+/**
+ * ReportTransport — accumulates events and generates report files on flush().
+ *
+ * Report writing uses Node.js `fs/promises` and is guarded behind the
+ * `PLATFORM_NODE` constant so that esbuild dead-code elimination strips
+ * file I/O from browser builds.
+ */
+
+interface ReportTransportOptions {
+    /** Directory to write report files to */
+    outputDir: string;
+    /** Which report formats to generate */
+    formats: ('json' | 'csv' | 'md')[];
+}
+declare class ReportTransport implements LogTransport {
+    private options;
+    name: string;
+    private events;
+    constructor(options: ReportTransportOptions);
+    write(event: ScraperEvent): void;
+    flush(): Promise<void>;
+}
+
+export { ApiError, type AuthEvent, AuthenticationError, type BrowserProfile, CallbackTransport, ConsoleTransport, type ConsoleTransportOptions, type DmConversation, type DmConversationResponse, type DmConversationTimeline, type DmInbox, type DmInboxResponse, type DmInboxTimelines, type DmMessage, type DmMessageData, type DmMessageEntities, type DmMessageEntry, type DmMessageUrl, type DmParticipant, type DmReaction, type DmStatus, type DmTimelineState, type DmWelcomeMessage, type EndpointMetrics, ErrorRateLimitStrategy, type FetchParameters, type FetchTransformOptions, type FlowSubtaskHandler, type FlowSubtaskHandlerApi, type FlowTokenResult, type FlowTokenResultError, type FlowTokenResultSuccess, type HttpRateLimitEvent, type HttpRequestEvent, type HttpResponseEvent, JsonLinesTransport, type JsonLinesTransportOptions, LOG_LEVEL_PRIORITY, type LogLevel, type LogTransport, type Mention, type ParseEvent, type Photo, type PlaceRaw, type Profile, type QueryProfilesResponse, type QueryTweetsResponse, type RateLimitEvent, type RateLimitStrategy, ReportTransport, type ReportTransportOptions, type ScrapeCompleteEvent, type ScrapeOperationMetrics, type ScrapePageEvent, type ScrapeStartEvent, Scraper, type ScraperErrorEvent, type ScraperEvent, type ScraperEventBase, ScraperLogger, type ScraperOptions, SearchMode, type SendTweetResult, type SessionMetrics, type Tweet, type TweetQuery, type TwitterApiErrorExtensions, type TwitterApiErrorPosition, type TwitterApiErrorRaw, type TwitterApiErrorTraceInfo, type TwitterUserAuthCredentials, type TwitterUserAuthFlowInitRequest, type TwitterUserAuthFlowRequest, type TwitterUserAuthFlowResponse, type TwitterUserAuthFlowSubtaskRequest, type Video, WaitingRateLimitStrategy, bookmarkTweet, deleteTweet, followUser, likeTweet, quoteTweet, randomizeBrowserProfile, retweet, sendTweet, unbookmarkTweet, undoRetweet, unfollowUser, unlikeTweet };
