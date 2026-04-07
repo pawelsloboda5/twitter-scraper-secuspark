@@ -193,6 +193,9 @@ export function parseLegacyTweet(
     isRetweet: false,
     isPin: false,
     sensitiveContent: false,
+    authorFollowersCount: user.followers_count,
+    authorFollowingCount: user.friends_count,
+    authorDescription: user.description,
   };
 
   if (tweet.created_at) {
@@ -274,6 +277,9 @@ function parseResult(result?: TimelineResultRaw): ParseTweetResult {
   if (!tweetResult.success) {
     return tweetResult;
   }
+
+  tweetResult.tweet.authorIsBlueVerified =
+    result?.core?.user_results?.result?.is_blue_verified ?? false;
 
   if (!tweetResult.tweet.views && result?.views?.count) {
     const views = parseInt(result.views.count);

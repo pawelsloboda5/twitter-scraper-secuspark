@@ -87,6 +87,10 @@ export interface Tweet {
   videos: Video[];
   views?: number;
   sensitiveContent?: boolean;
+  authorFollowersCount?: number;
+  authorFollowingCount?: number;
+  authorIsBlueVerified?: boolean;
+  authorDescription?: string;
 }
 
 export type TweetQuery =

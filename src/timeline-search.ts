@@ -54,6 +54,10 @@ export function parseSearchTimelineTweets(
           );
 
           if (tweetResult.success) {
+            tweetResult.tweet.authorIsBlueVerified =
+              tweetResultRaw?.core?.user_results?.result?.is_blue_verified ??
+              false;
+
             if (!tweetResult.tweet.views && tweetResultRaw?.views?.count) {
               const views = parseInt(tweetResultRaw.views.count);
               if (!isNaN(views)) {
