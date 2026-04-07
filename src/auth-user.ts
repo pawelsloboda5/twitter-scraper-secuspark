@@ -252,6 +252,12 @@ export class TwitterUserAuth extends TwitterGuestAuth {
     email?: string,
     twoFactorSecret?: string,
   ): Promise<void> {
+    this.logger?.emit({
+      event: 'auth.login_start',
+      level: 'info',
+      detail: `Login starting for ${username}`,
+    });
+
     // Pre-flight: visit x.com to establish Cloudflare cookies and session context.
     // A real browser visits the page before starting the login API flow, and skipping
     // this step can trigger Twitter's anti-bot detection (error 399).
@@ -288,6 +294,13 @@ export class TwitterUserAuth extends TwitterGuestAuth {
 
       const subtaskId = next.response.subtasks[0].subtask_id;
 
+      this.logger?.emit({
+        event: 'auth.login_step',
+        level: 'debug',
+        subtaskId,
+        detail: `Handling subtask: ${subtaskId}`,
+      });
+
       // Add a human-like delay between flow steps.
       // Real browsers take 1-3 seconds between steps (page render, user reading, typing).
       // Without this delay, Twitter flags the rapid-fire request pattern as bot activity (error 399).
@@ -313,8 +326,19 @@ export class TwitterUserAuth extends TwitterGuestAuth {
       }
     }
     if (next.status === 'error') {
+      this.logger?.emit({
+        event: 'auth.login_failure',
+        level: 'error',
+        detail: `Login failed: ${next.err.message}`,
+      });
       throw next.err;
     }
+
+    this.logger?.emit({
+      event: 'auth.login_success',
+      level: 'info',
+      detail: 'Login completed successfully',
+    });
   }
 
   /**

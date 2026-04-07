@@ -222,7 +222,11 @@ export class Scraper {
     maxTweets: number,
     searchMode: SearchMode = SearchMode.Top,
   ): AsyncGenerator<Tweet, void> {
-    return searchTweets(query, maxTweets, searchMode, this.auth);
+    return this.instrumentGenerator(
+      'searchTweets',
+      { query, maxTweets, searchMode },
+      searchTweets(query, maxTweets, searchMode, this.auth),
+    );
   }
 
   /**
@@ -235,7 +239,11 @@ export class Scraper {
     query: string,
     maxProfiles: number,
   ): AsyncGenerator<Profile, void> {
-    return searchProfiles(query, maxProfiles, this.auth);
+    return this.instrumentGenerator(
+      'searchProfiles',
+      { query, maxProfiles },
+      searchProfiles(query, maxProfiles, this.auth),
+    );
   }
 
   /**
@@ -311,7 +319,11 @@ export class Scraper {
     userId: string,
     maxProfiles: number,
   ): AsyncGenerator<Profile, void> {
-    return getFollowing(userId, maxProfiles, this.auth);
+    return this.instrumentGenerator(
+      'getFollowing',
+      { userId, maxProfiles },
+      getFollowing(userId, maxProfiles, this.auth),
+    );
   }
 
   /**
@@ -324,7 +336,11 @@ export class Scraper {
     userId: string,
     maxProfiles: number,
   ): AsyncGenerator<Profile, void> {
-    return getFollowers(userId, maxProfiles, this.auth);
+    return this.instrumentGenerator(
+      'getFollowers',
+      { userId, maxProfiles },
+      getFollowers(userId, maxProfiles, this.auth),
+    );
   }
 
   /**
@@ -372,7 +388,11 @@ export class Scraper {
    * @returns An {@link AsyncGenerator} of tweets from the provided user.
    */
   public getTweets(user: string, maxTweets = 200): AsyncGenerator<Tweet> {
-    return getTweets(user, maxTweets, this.auth);
+    return this.instrumentGenerator(
+      'getTweets',
+      { user, maxTweets },
+      getTweets(user, maxTweets, this.auth),
+    );
   }
 
   /**
@@ -382,7 +402,11 @@ export class Scraper {
    * @returns An {@link AsyncGenerator} of liked tweets from the provided user.
    */
   public getLikedTweets(user: string, maxTweets = 200): AsyncGenerator<Tweet> {
-    return getLikedTweets(user, maxTweets, this.auth);
+    return this.instrumentGenerator(
+      'getLikedTweets',
+      { user, maxTweets },
+      getLikedTweets(user, maxTweets, this.auth),
+    );
   }
 
   /**
@@ -395,7 +419,11 @@ export class Scraper {
     userId: string,
     maxTweets = 200,
   ): AsyncGenerator<Tweet, void> {
-    return getTweetsByUserId(userId, maxTweets, this.auth);
+    return this.instrumentGenerator(
+      'getTweetsByUserId',
+      { userId, maxTweets },
+      getTweetsByUserId(userId, maxTweets, this.auth),
+    );
   }
 
   /**
@@ -408,7 +436,11 @@ export class Scraper {
     user: string,
     maxTweets = 200,
   ): AsyncGenerator<Tweet> {
-    return getTweetsAndReplies(user, maxTweets, this.auth);
+    return this.instrumentGenerator(
+      'getTweetsAndReplies',
+      { user, maxTweets },
+      getTweetsAndReplies(user, maxTweets, this.auth),
+    );
   }
 
   /**
@@ -421,7 +453,11 @@ export class Scraper {
     userId: string,
     maxTweets = 200,
   ): AsyncGenerator<Tweet, void> {
-    return getTweetsAndRepliesByUserId(userId, maxTweets, this.auth);
+    return this.instrumentGenerator(
+      'getTweetsAndRepliesByUserId',
+      { userId, maxTweets },
+      getTweetsAndRepliesByUserId(userId, maxTweets, this.auth),
+    );
   }
 
   /**
@@ -601,6 +637,12 @@ export class Scraper {
 
     // Swap in guest authorizers for all requests
     this.useGuestAuth();
+
+    this._logger.emit({
+      event: 'auth.logout',
+      level: 'info',
+      detail: 'Logged out',
+    });
   }
 
   /**
@@ -651,6 +693,12 @@ export class Scraper {
 
     this.auth = userAuth;
     this.authTrends = userAuth;
+
+    this._logger.emit({
+      event: 'auth.cookies_set',
+      level: 'info',
+      detail: `Set ${cookies.length} cookies`,
+    });
 
     // Warn if auth_token is missing - this is the most common cause of 401 errors.
     // auth_token is an HttpOnly cookie that cannot be accessed via document.cookie;
@@ -708,6 +756,43 @@ export class Scraper {
       'Warning: Scraper#withXCsrfToken is deprecated and will be removed in a later version.',
     );
     return this;
+  }
+
+  private async *instrumentGenerator<T>(
+    operation: string,
+    params: Record<string, unknown>,
+    generator: AsyncGenerator<T, void>,
+  ): AsyncGenerator<T, void> {
+    this._logger.emit({
+      event: 'scrape.start',
+      level: 'info',
+      operation,
+      params,
+    });
+
+    const startTime = Date.now();
+    let totalItems = 0;
+    let errors = 0;
+
+    try {
+      for await (const item of generator) {
+        totalItems++;
+        yield item;
+      }
+    } catch (err) {
+      errors++;
+      throw err;
+    } finally {
+      this._logger.emit({
+        event: 'scrape.complete',
+        level: 'info',
+        operation,
+        totalItems,
+        totalPages: 0,
+        durationMs: Date.now() - startTime,
+        errors,
+      });
+    }
   }
 
   private getAuthOptions(): Partial<TwitterAuthOptions> {

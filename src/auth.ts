@@ -406,6 +406,12 @@ export class TwitterGuestAuth implements TwitterAuth {
 
     await this.setCookie('gt', newGuestToken);
 
+    this.logger?.emit({
+      event: 'auth.guest_token',
+      level: 'info',
+      detail: `Guest token updated (length: ${newGuestToken.length})`,
+    });
+
     log(`Updated guest token (length: ${newGuestToken.length})`);
   }
 
