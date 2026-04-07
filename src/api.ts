@@ -9,6 +9,28 @@ import { generateTransactionId } from './xctxid';
 
 const log = debug('twitter-scraper:api');
 
+function extractEndpoint(url: string): string {
+  try {
+    const u = new URL(url);
+    // For GraphQL: https://api.x.com/graphql/HASH/OperationName -> "OperationName"
+    const graphqlMatch = u.pathname.match(/\/graphql\/[^/]+\/([^/?]+)/);
+    if (graphqlMatch) return graphqlMatch[1];
+    // For REST: https://api.x.com/1.1/guest/activate.json -> "guest/activate"
+    const restMatch = u.pathname.match(/\/1\.1\/(.+?)(?:\.json)?$/);
+    if (restMatch) return restMatch[1];
+    // Fallback: use the pathname
+    return u.pathname;
+  } catch {
+    return url;
+  }
+}
+
+function parseIntOrUndef(value: string | null): number | undefined {
+  if (value == null) return undefined;
+  const n = parseInt(value, 10);
+  return isNaN(n) ? undefined : n;
+}
+
 export interface FetchTransformOptions {
   /**
    * Transforms the request options before a request is made. This executes after all of the default
@@ -74,6 +96,17 @@ export async function requestApi<T>(
 ): Promise<RequestApiResult<T>> {
   log(`Making ${method} request to ${url}`);
 
+  const endpoint = extractEndpoint(url);
+  const logger = auth.logger;
+  logger?.emit({
+    event: 'http.request',
+    level: 'debug',
+    method,
+    url,
+    endpoint,
+  });
+  const startTime = Date.now();
+
   await auth.installTo(headers, url, bearerTokenOverride);
   await platform.randomizeCiphers();
 
@@ -112,6 +145,14 @@ export async function requestApi<T>(
         throw err;
       }
 
+      logger?.emit({
+        event: 'error',
+        level: 'error',
+        code: 'NETWORK_ERROR',
+        message: err.message,
+        endpoint,
+      });
+
       return {
         success: false,
         err,
@@ -121,6 +162,45 @@ export async function requestApi<T>(
     await updateCookieJar(auth.cookieJar(), res.headers);
 
     if (res.status === 429) {
+      const durationMs = Date.now() - startTime;
+      const rateLimitRemaining = parseIntOrUndef(
+        res.headers.get('x-rate-limit-remaining'),
+      );
+      const rateLimitReset = parseIntOrUndef(
+        res.headers.get('x-rate-limit-reset'),
+      );
+      const rateLimitLimit = parseIntOrUndef(
+        res.headers.get('x-rate-limit-limit'),
+      );
+
+      logger?.emit({
+        event: 'http.response',
+        level: 'warn',
+        method,
+        url,
+        endpoint,
+        statusCode: 429,
+        durationMs,
+        rateLimitRemaining,
+        rateLimitReset,
+        rateLimitLimit,
+      });
+
+      const resetTime = rateLimitReset ? rateLimitReset : 0;
+      const waitMs = resetTime
+        ? Math.max(0, (resetTime - Date.now() / 1000) * 1000)
+        : 0;
+
+      logger?.emit({
+        event: 'http.rate_limit',
+        level: 'warn',
+        endpoint,
+        rateLimitLimit: rateLimitLimit ?? 0,
+        rateLimitRemaining: rateLimitRemaining ?? 0,
+        rateLimitReset: rateLimitReset ?? 0,
+        waitMs,
+      });
+
       log('Rate limit hit, waiting for retry...');
       await auth.onRateLimit({
         fetchParameters: fetchParameters,
@@ -129,12 +209,50 @@ export async function requestApi<T>(
     }
   } while (res.status === 429);
 
+  const durationMs = Date.now() - startTime;
+  const rateLimitRemaining = parseIntOrUndef(
+    res.headers.get('x-rate-limit-remaining'),
+  );
+  const rateLimitReset = parseIntOrUndef(res.headers.get('x-rate-limit-reset'));
+  const rateLimitLimit = parseIntOrUndef(res.headers.get('x-rate-limit-limit'));
+
   if (!res.ok) {
-    return {
-      success: false,
-      err: await ApiError.fromResponse(res),
-    };
+    const err = await ApiError.fromResponse(res);
+    logger?.emit({
+      event: 'http.response',
+      level: 'warn',
+      method,
+      url,
+      endpoint,
+      statusCode: res.status,
+      durationMs,
+      rateLimitRemaining,
+      rateLimitReset,
+      rateLimitLimit,
+    });
+    logger?.emit({
+      event: 'error',
+      level: 'error',
+      code: 'API_ERROR',
+      statusCode: res.status,
+      message: err.message,
+      endpoint,
+    });
+    return { success: false, err };
   }
+
+  logger?.emit({
+    event: 'http.response',
+    level: 'info',
+    method,
+    url,
+    endpoint,
+    statusCode: res.status,
+    durationMs,
+    rateLimitRemaining,
+    rateLimitReset,
+    rateLimitLimit,
+  });
 
   const value: T = await flexParseJson(res);
   if (res.headers.get('x-rate-limit-incoming') == '0') {

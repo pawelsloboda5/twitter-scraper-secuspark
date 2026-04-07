@@ -1,5 +1,20 @@
 import { ScraperEvent } from './logger-events';
 
+/**
+ * Distributive Omit that preserves discriminated union members.
+ * Standard `Omit` collapses the union into a single flat type, which
+ * breaks excess-property checking on individual event objects.
+ */
+type DistributiveOmit<T, K extends keyof any> = T extends any
+  ? Omit<T, K>
+  : never;
+
+/** The shape callers pass to `emit()` -- every event minus the auto-stamped fields. */
+export type ScraperEventInput = DistributiveOmit<
+  ScraperEvent,
+  'timestamp' | 'sessionId'
+>;
+
 // ---------------------------------------------------------------------------
 // Transport interface
 // ---------------------------------------------------------------------------
@@ -102,7 +117,7 @@ export class ScraperLogger {
     }
   }
 
-  emit(event: Omit<ScraperEvent, 'timestamp' | 'sessionId'>): void {
+  emit(event: ScraperEventInput): void {
     const stamped: ScraperEvent = {
       ...event,
       timestamp: new Date().toISOString(),
