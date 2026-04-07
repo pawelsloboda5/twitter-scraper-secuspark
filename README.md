@@ -1,294 +1,367 @@
-# twitter-scraper
+# twitter-scraper-secuspark
 
-[![Documentation badge](https://img.shields.io/badge/docs-here-informational)](https://the-convocation.github.io/twitter-scraper/)
+A powerful X (formerly Twitter) scraper with structured logging, write operations, and author metadata.
 
-A port of the now-archived [n0madic/twitter-scraper](https://github.com/n0madic/twitter-scraper) to Node.js.
+> Fork of [`@the-convocation/twitter-scraper`](https://github.com/the-convocation/twitter-scraper) with significant additions for automation, AI agent integration, and full read/write support.
 
-> Twitter's API is annoying to work with, and has lots of limitations — luckily
-> their frontend (JavaScript) has it's own API, which I reverse-engineered. No
-> API rate limits. No tokens needed. No restrictions. Extremely fast.
->
-> You can use this library to get the text of any user's Tweets trivially.
+## What's New in This Fork
 
-Many things have changed since X (the company formerly known as Twitter) was acquired in 2022:
-
-- Several operations require logging in with a real user account via
-  `scraper.login()`. **While we are not aware of confirmed cases caused
-  by this library, any account you log into with this library is subject
-  to being banned at any time. You have been warned.**
-- Twitter's frontend API does in fact have rate limits
-  ([#11](https://github.com/the-convocation/twitter-scraper/issues/11)).
-  The rate limits are dynamic and sometimes change, so we don't know
-  exactly what they are at all times. Refer to [rate limiting](#rate-limiting)
-  for more information.
-- Twitter's authentication requirements and frontend API endpoints
-  change frequently, breaking this library. Fixes for these issues
-  typically take at least a few days to go out.
+- **Structured logging system** -- ConsoleTransport (colored terminal), JsonLinesTransport (machine-readable JSONL), ReportTransport (generates `.md`, `.json`, `.csv` report files), and CallbackTransport (custom handler)
+- **12 write operations** -- sendTweet, reply, quoteTweet, deleteTweet, likeTweet, unlikeTweet, retweet, undoRetweet, followUser, unfollowUser, bookmarkTweet, unbookmarkTweet
+- **Author metadata on tweets** -- `authorFollowersCount`, `authorFollowingCount`, `authorIsBlueVerified`, `authorDescription` fields populated on parsed tweets
+- **All domains updated** from twitter.com to x.com
+- **Diagnostic script** for testing all operations and generating reports
 
 ## Installation
 
-This package requires Node.js v16.0.0 or greater.
-
-NPM:
-
 ```sh
-npm install @the-convocation/twitter-scraper
+npm install github:pawelsloboda5/twitter-scraper-secuspark#secuspark/author-metadata
 ```
 
-Yarn:
+TypeScript types are bundled with the distribution.
 
-```sh
-yarn add @the-convocation/twitter-scraper
-```
+## Quick Start
 
-TypeScript types have been bundled with the distribution.
+```typescript
+import { Scraper } from 'twitter-scraper-secuspark';
 
-## Usage
-
-Most use cases are exactly the same as in
-[n0madic/twitter-scraper](https://github.com/n0madic/twitter-scraper). Channel
-iterators have been translated into
-[AsyncGenerator](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/AsyncGenerator)
-instances, and can be consumed with the corresponding
-`for await (const x of y) { ... }` syntax.
-
-### Browser usage
-
-This package directly invokes the Twitter API, which does not have permissive
-CORS headers. With the default settings, requests will fail unless you disable
-CORS checks, which is not advised. Instead, applications must provide a CORS
-proxy and configure it in the `Scraper` options.
-
-Proxies (and other request mutations) can be configured with the request
-interceptor transform:
-
-```ts
-const scraper = new Scraper({
-  transform: {
-    request(input: RequestInfo | URL, init?: RequestInit) {
-      // The arguments here are the same as the parameters to fetch(), and
-      // are kept as-is for flexibility of both the library and applications.
-      if (input instanceof URL) {
-        const proxy =
-          'https://corsproxy.io/?' + encodeURIComponent(input.toString());
-        return [proxy, init];
-      } else if (typeof input === 'string') {
-        const proxy = 'https://corsproxy.io/?' + encodeURIComponent(input);
-        return [proxy, init];
-      } else {
-        // Omitting handling for example
-        throw new Error('Unexpected request input type');
-      }
-    },
-  },
-});
-```
-
-[corsproxy.io](https://corsproxy.io) is a public CORS proxy that works correctly
-with this package.
-
-The public CORS proxy [corsproxy.org](https://corsproxy.org) _does not work_ at
-the time of writing (at least not using their recommended integration on the
-front page).
-
-#### Next.js 13.x example:
-
-```tsx
-'use client';
-
-import { Scraper, Tweet } from '@the-convocation/twitter-scraper';
-import { useEffect, useMemo, useState } from 'react';
-
-export default function Home() {
-  const scraper = useMemo(
-    () =>
-      new Scraper({
-        transform: {
-          request(input: RequestInfo | URL, init?: RequestInit) {
-            if (input instanceof URL) {
-              const proxy =
-                'https://corsproxy.io/?' + encodeURIComponent(input.toString());
-              return [proxy, init];
-            } else if (typeof input === 'string') {
-              const proxy =
-                'https://corsproxy.io/?' + encodeURIComponent(input);
-              return [proxy, init];
-            } else {
-              throw new Error('Unexpected request input type');
-            }
-          },
-        },
-      }),
-    [],
-  );
-  const [tweet, setTweet] = useState<Tweet | null>(null);
-
-  useEffect(() => {
-    async function getTweet() {
-      const latestTweet = await scraper.getLatestTweet('twitter');
-      if (latestTweet) {
-        setTweet(latestTweet);
-      }
-    }
-
-    getTweet();
-  }, [scraper]);
-
-  return (
-    <main className="flex min-h-screen flex-col items-center justify-between p-24">
-      {tweet?.text}
-    </main>
-  );
-}
-```
-
-### Edge runtimes
-
-This package currently uses
-[`cross-fetch`](https://www.npmjs.com/package/cross-fetch) as a portable
-`fetch`. Edge runtimes such as CloudFlare Workers sometimes have `fetch`
-functions that behave differently from the web standard, so you may need to
-override the `fetch` function the scraper uses. If so, a custom `fetch` can be
-provided in the options:
-
-```ts
-const scraper = new Scraper({
-  fetch: fetch,
-});
-```
-
-Note that this does not change the arguments passed to the function, or the
-expected return type. If the custom `fetch` function produces runtime errors
-related to incorrect types, be sure to wrap it in a shim (not currently
-supported directly by interceptors):
-
-```ts
-const scraper = new Scraper({
-  fetch: (input, init) => {
-    // Transform input and init into your function's expected types...
-    return fetch(input, init).then((res) => {
-      // Transform res into a web-compliant response...
-      return res;
-    });
-  },
-});
-```
-
-### Bypassing Cloudflare bot detection
-
-In some cases, Twitter's authentication endpoints may be protected by Cloudflare's advanced bot detection, resulting in `403 Forbidden` errors during login. This typically happens because standard Node.js TLS fingerprints are detected as non-browser clients.
-
-To bypass this protection, you can use the optional CycleTLS `fetch` integration to mimic Chrome browser TLS fingerprints:
-
-**Installation:**
-
-```sh
-npm install cycletls
-# or
-yarn add cycletls
-```
-
-**Usage:**
-
-```ts
-import { Scraper } from '@the-convocation/twitter-scraper';
-import {
-  cycleTLSFetch,
-  cycleTLSExit,
-} from '@the-convocation/twitter-scraper/cycletls';
-
-const scraper = new Scraper({
-  fetch: cycleTLSFetch,
-});
-
-// Use the scraper normally
-await scraper.login(username, password, email);
-
-// Important: cleanup CycleTLS resources when done
-cycleTLSExit();
-```
-
-**Note:** The `/cycletls` entrypoint is Node.js only and will not work in browser environments. It's provided as a separate optional entrypoint to avoid bundling binaries in environments where they cannot run.
-
-See the [cycletls example](./examples/cycletls/) for a complete working example.
-
-### Cookie-based authentication
-
-If you're encountering `error 399` ("Incorrect. Please try again") or Twitter's suspicious activity detection during login, you can use cookies exported from an already-authenticated browser session instead. This approach:
-
-- Avoids Twitter's anti-bot protection that blocks automated logins
-- No need to store or handle passwords in code
-- Uses your established browser session
-- Bypasses rate limiting on authentication endpoints
-
-**Step 1: Export cookies from your browser**
-
-Using Chrome/Edge:
-
-1. Log in to X.com in your browser
-2. Open DevTools (F12) → Application tab → Cookies
-3. Click the URL bar that says "Filter cookies" and press Ctrl+A to select all cookies
-4. Copy all cookies (they'll be in format: `name1=value1; name2=value2; ...`)
-
-Using Firefox:
-
-1. Log in to X.com in your browser
-2. Open DevTools (F12) → Storage tab → Cookies → `https://x.com`
-3. Find the `ct0` cookie and copy its value
-4. Find the `auth_token` cookie and copy its value
-5. Construct the cookie string: `ct0=<value>; auth_token=<value>`
-
-> **Tip:** You can use the [Cookie-Editor](https://addons.mozilla.org/en-US/firefox/addon/cookie-editor/) extension to export cookies in a convenient format.
-
-**Step 2: Use cookies in your code**
-
-```ts
-import { Cookie } from 'tough-cookie';
-import { Scraper } from '@the-convocation/twitter-scraper';
-
-// Your cookie string from browser (name=value; name2=value2; ...)
-const cookieString = 'ct0=abc123; auth_token=xyz789; lang=en; ...';
-
-// Parse the cookie string
-const cookies = cookieString
-  .split(';')
-  .map((c) => Cookie.parse(c))
-  .filter(Boolean);
-
-// Create scraper and set cookies
 const scraper = new Scraper();
+
+// Set cookies for authentication (recommended)
+await scraper.setCookies([
+  'ct0=your_ct0_value; Domain=x.com',
+  'auth_token=your_auth_token; Domain=x.com',
+]);
+
+// Fetch a tweet
+const tweet = await scraper.getTweet('1585338303800578049');
+console.log(tweet?.text);
+```
+
+## Authentication
+
+### Cookie-based (recommended)
+
+Cookie authentication is the most reliable method. Export `ct0` and `auth_token` from your browser and use them directly.
+
+**Step 1: Get cookies from your browser**
+
+1. Log in to x.com in your browser
+2. Open DevTools (F12) -> Application tab -> Cookies -> `https://x.com`
+3. Copy the values of `ct0` and `auth_token`
+
+**Step 2: Create a `.env.local` file**
+
+```
+TWITTER_COOKIES=[{"key":"ct0","value":"your_ct0_value","domain":"x.com"},{"key":"auth_token","value":"your_auth_token","domain":"x.com"}]
+```
+
+**Step 3: Use in code**
+
+```typescript
+import { Scraper } from 'twitter-scraper-secuspark';
+import { Cookie } from 'tough-cookie';
+import dotenv from 'dotenv';
+
+dotenv.config({ path: '.env.local' });
+
+const scraper = new Scraper();
+const cookies = JSON.parse(process.env.TWITTER_COOKIES!).map((c: any) =>
+  Cookie.fromJSON(c),
+);
 await scraper.setCookies(cookies);
 
-// Verify authentication works
-const isLoggedIn = await scraper.isLoggedIn();
-if (isLoggedIn) {
-  console.log('✓ Successfully authenticated with cookies!');
-  // Now you can use authenticated features
-  const profile = await scraper.getProfile('username');
+const loggedIn = await scraper.isLoggedIn();
+console.log('Authenticated:', loggedIn);
+```
+
+Or set cookies directly from strings:
+
+```typescript
+await scraper.setCookies([
+  'ct0=abc123; Domain=x.com',
+  'auth_token=xyz789; Domain=x.com',
+]);
+```
+
+Cookies expire over time. If authentication fails, export fresh cookies from your browser.
+
+### Password login (unreliable)
+
+```typescript
+await scraper.login('username', 'password', 'email@example.com');
+```
+
+> **Warning:** Password login triggers X's anti-bot detection frequently. **Any account you log into with this library is subject to being banned at any time.** Cookie authentication is strongly preferred.
+
+### Anonymous (limited)
+
+Without any authentication, only a subset of read operations work:
+
+| Auth Level | Available Operations |
+| --- | --- |
+| **Anonymous** | `getTweet`, `getProfile`, `getUserIdByScreenName`, `getLatestTweet`, `getTweets`, `getTweetsAndReplies`, `getTweetsByUserId`, `getTweetsAndRepliesByUserId`, `getTrends`, `getFollowers`, `getFollowing` |
+| **Auth required** | `searchTweets`, `searchProfiles`, `fetchSearchTweets`, `fetchSearchProfiles`, `getLikedTweets`, `fetchLikedTweets`, `fetchListTweets`, all write operations, all DM operations |
+
+## Reading Data
+
+### Fetching Tweets
+
+```typescript
+// Single tweet by ID
+const tweet = await scraper.getTweet('1585338303800578049');
+
+// Latest tweet from a user
+const latest = await scraper.getLatestTweet('elonmusk');
+
+// Multiple tweets from a user's timeline
+for await (const tweet of scraper.getTweets('elonmusk', 100)) {
+  console.log(tweet.text);
+}
+
+// Tweets and replies from a user
+for await (const tweet of scraper.getTweetsAndReplies('elonmusk', 50)) {
+  console.log(tweet.text, tweet.isReply);
+}
+
+// Search tweets (requires auth)
+import { SearchMode } from 'twitter-scraper-secuspark';
+
+for await (const tweet of scraper.searchTweets('javascript', 50, SearchMode.Latest)) {
+  console.log(tweet.text);
 }
 ```
 
-Cookies expire over time. If authentication fails, you may need to export fresh cookies from your browser.
+### Fetching Profiles
 
-### Rate limiting
+```typescript
+// Get a profile
+const profile = await scraper.getProfile('elonmusk');
+console.log(profile.followersCount, profile.biography);
 
-The Twitter API heavily rate-limits clients, requiring that the scraper has its own
-rate-limit handling to behave predictably when rate-limiting occurs. By default, the
-scraper uses a rate-limiting strategy that waits for the current rate-limiting period
-to expire before resuming requests.
+// Get user ID from screen name
+const userId = await scraper.getUserIdByScreenName('elonmusk');
 
-**This has been known to take a very long time, in some cases (up to 13 minutes).**
+// Search profiles (requires auth)
+for await (const profile of scraper.searchProfiles('openai', 10)) {
+  console.log(profile.username, profile.followersCount);
+}
+```
 
-You may want to change how rate-limiting events are handled, potentially by pooling
-scrapers logged-in to different accounts (refer to [#116](https://github.com/the-convocation/twitter-scraper/pull/116) for how to do this yourself). The rate-limit handling strategy can be configured by passing a custom
-implementation to the `rateLimitStrategy` option in the scraper constructor:
+### Relationships
 
-```ts
-import { Scraper, RateLimitStrategy } from '@the-convocation/twitter-scraper';
+```typescript
+const userId = await scraper.getUserIdByScreenName('elonmusk');
+
+// Get followers
+for await (const profile of scraper.getFollowers(userId, 100)) {
+  console.log(profile.username);
+}
+
+// Get following
+for await (const profile of scraper.getFollowing(userId, 100)) {
+  console.log(profile.username);
+}
+```
+
+### Trends
+
+```typescript
+const trends = await scraper.getTrends();
+console.log(trends); // ['#topic1', '#topic2', ...]
+```
+
+### Direct Messages (requires auth)
+
+```typescript
+// Get DM inbox
+const inbox = await scraper.getDmInbox();
+
+// Get a specific conversation
+const conversation = await scraper.getDmConversation('conversation-id');
+
+// Iterate messages from a conversation
+for await (const message of scraper.getDmMessages('conversation-id', 50)) {
+  console.log(message);
+}
+
+// Find conversations with a specific user
+const convos = scraper.findDmConversationsByUserId(inbox, 'user-id');
+```
+
+### Author Metadata on Tweets
+
+Tweets in this fork include extra author metadata fields that are not available in the upstream library:
+
+```typescript
+const tweet = await scraper.getTweet('1585338303800578049');
+
+console.log(tweet?.authorFollowersCount);    // e.g. 170000000
+console.log(tweet?.authorFollowingCount);     // e.g. 800
+console.log(tweet?.authorIsBlueVerified);     // true / false
+console.log(tweet?.authorDescription);        // "Author's bio text"
+```
+
+These fields are populated from the user data embedded in the tweet response.
+
+## Write Operations
+
+All write operations require authentication. They are available both as `Scraper` instance methods and as standalone functions.
+
+```typescript
+// Post a tweet
+const result = await scraper.sendTweet('Hello from the API!');
+console.log('New tweet ID:', result.tweetId);
+
+// Reply to a tweet
+await scraper.sendTweet('Great point!', tweetId);
+
+// Quote tweet
+await scraper.quoteTweet('Check this out', tweetId, 'username');
+
+// Delete a tweet
+await scraper.deleteTweet(tweetId);
+
+// Like / Unlike
+await scraper.likeTweet(tweetId);
+await scraper.unlikeTweet(tweetId);
+
+// Retweet / Undo retweet
+await scraper.retweet(tweetId);
+await scraper.undoRetweet(tweetId);
+
+// Follow / Unfollow
+await scraper.followUser('username');
+await scraper.unfollowUser('username');
+
+// Bookmark / Unbookmark
+await scraper.bookmarkTweet(tweetId);
+await scraper.unbookmarkTweet(tweetId);
+```
+
+## Logging System
+
+The scraper includes a structured logging system designed for both human debugging and AI agent consumption. Configure transports when creating the scraper:
+
+### AI Agents: Structured JSON Lines
+
+```typescript
+import * as fs from 'fs';
+import { Scraper, JsonLinesTransport } from 'twitter-scraper-secuspark';
+
+const scraper = new Scraper({
+  logging: {
+    transports: [
+      new JsonLinesTransport({
+        writeLine: (line) => fs.appendFileSync('log.jsonl', line + '\n'),
+      }),
+    ],
+  },
+});
+```
+
+### Humans: Colored Terminal + Report Files
+
+```typescript
+import { Scraper, ConsoleTransport, ReportTransport } from 'twitter-scraper-secuspark';
+
+const scraper = new Scraper({
+  logging: {
+    transports: [
+      new ConsoleTransport({ minLevel: 'info' }),
+      new ReportTransport({ outputDir: './reports', formats: ['md', 'json', 'csv'] }),
+    ],
+  },
+});
+```
+
+### Custom: Callback Transport
+
+```typescript
+import { Scraper, CallbackTransport } from 'twitter-scraper-secuspark';
+
+const scraper = new Scraper({
+  logging: {
+    transports: [new CallbackTransport((event) => mySystem.record(event))],
+  },
+});
+```
+
+### Event Types
+
+All events are typed via a discriminated union on the `event` field:
+
+| Event | Description |
+| --- | --- |
+| `http.request` | Outgoing HTTP request (method, URL, endpoint) |
+| `http.response` | HTTP response received (status, duration, rate limit headers) |
+| `http.rate_limit` | Rate limit triggered (endpoint, wait time) |
+| `auth.login_start` | Login flow initiated |
+| `auth.login_step` | Login flow step completed |
+| `auth.login_success` | Login succeeded |
+| `auth.login_failure` | Login failed |
+| `auth.logout` | Logged out |
+| `auth.guest_token` | Guest token acquired |
+| `auth.cookies_set` | Cookies set on scraper |
+| `scrape.start` | Scrape operation started (operation name, params) |
+| `scrape.page` | Page of results fetched (page number, item count) |
+| `scrape.complete` | Scrape operation finished (total items, duration) |
+| `parse.success` | Entity parsed successfully |
+| `parse.failure` | Entity parse failed |
+| `error` | General error (code, message, endpoint) |
+
+### Session Metrics
+
+```typescript
+// Get aggregated metrics at any time
+const metrics = scraper.logger.getMetrics();
+console.log(metrics.totalRequests);
+console.log(metrics.successfulRequests);
+console.log(metrics.rateLimitsHit);
+console.log(metrics.scrapeOperations);
+
+// Flush to trigger report generation (for ReportTransport)
+await scraper.logger.flush();
+
+// Close logger and all transports when done
+await scraper.logger.close();
+```
+
+## Diagnostic Script
+
+The included `diagnose.ts` exercises every scraper operation and generates a full set of reports:
+
+```sh
+# Anonymous mode (limited operations)
+npx tsx diagnose.ts
+
+# Full authenticated test
+npx tsx diagnose.ts --with-cookies
+```
+
+Requires a `.env.local` file with `TWITTER_COOKIES` for authenticated mode.
+
+**Generated output:**
+- `reports/diagnose-*.jsonl` -- Structured JSON lines for AI agents
+- `reports/report-*.md` -- Human-readable markdown report
+- `reports/report-*.json` -- Machine-readable session metrics
+- `reports/report-*.csv` -- Spreadsheet-friendly event log
+- `reports/diagnose-results-*.json` -- Test results summary
+
+## Advanced Configuration
+
+### Rate Limiting
+
+X's API rate-limits clients heavily. By default, the scraper waits for the current rate-limiting period to expire before resuming requests. **This can take up to 13 minutes in some cases.**
+
+You can customize the strategy:
+
+```typescript
+import { Scraper, RateLimitStrategy } from 'twitter-scraper-secuspark';
 
 class CustomRateLimitStrategy implements RateLimitStrategy {
   async onRateLimit(event: RateLimitEvent): Promise<void> {
-    // your own logic...
+    // Your own logic -- e.g. rotate accounts, log, abort, etc.
   }
 }
 
@@ -297,57 +370,214 @@ const scraper = new Scraper({
 });
 ```
 
-More information on this interface can be found on the [`RateLimitStrategy`](https://the-convocation.github.io/twitter-scraper/interfaces/RateLimitStrategy.html)
-page in the documentation. The library provides two pre-written implementations to choose from:
+Built-in strategies:
+- `WaitingRateLimitStrategy` (default) -- Waits for the limit to expire
+- `ErrorRateLimitStrategy` -- Throws immediately on any rate limit
 
-- `WaitingRateLimitStrategy`: The default, which waits for the limit to expire.
-- `ErrorRateLimitStrategy`: A strategy that throws if any rate-limit event occurs.
+### CycleTLS Bypass
+
+If X's authentication endpoints return `403 Forbidden` due to Cloudflare bot detection, you can use CycleTLS to mimic Chrome TLS fingerprints:
+
+```sh
+npm install cycletls
+```
+
+```typescript
+import { Scraper } from 'twitter-scraper-secuspark';
+import { cycleTLSFetch, cycleTLSExit } from 'twitter-scraper-secuspark/cycletls';
+
+const scraper = new Scraper({
+  fetch: cycleTLSFetch,
+});
+
+await scraper.login('username', 'password', 'email');
+
+// Clean up when done
+cycleTLSExit();
+```
+
+The `/cycletls` entrypoint is Node.js only and will not work in browser environments.
+
+### Browser Usage with CORS Proxy
+
+X's API does not have permissive CORS headers. In browser environments, configure a CORS proxy:
+
+```typescript
+const scraper = new Scraper({
+  transform: {
+    request(input: RequestInfo | URL, init?: RequestInit) {
+      if (input instanceof URL) {
+        const proxy = 'https://corsproxy.io/?' + encodeURIComponent(input.toString());
+        return [proxy, init];
+      } else if (typeof input === 'string') {
+        const proxy = 'https://corsproxy.io/?' + encodeURIComponent(input);
+        return [proxy, init];
+      } else {
+        throw new Error('Unexpected request input type');
+      }
+    },
+  },
+});
+```
+
+### Edge Runtimes
+
+Edge runtimes like CloudFlare Workers may have non-standard `fetch` implementations. You can provide a custom `fetch`:
+
+```typescript
+const scraper = new Scraper({
+  fetch: fetch,
+});
+```
+
+### Experimental Features
+
+```typescript
+const scraper = new Scraper({
+  experimental: {
+    xClientTransactionId: true,  // Generate x-client-transaction-id header
+    xpff: true,                  // Generate x-xp-forwarded-for header
+    flowStepDelay: 2000,         // Delay between login steps (ms) to avoid bot detection
+    browserProfile: {            // Override Castle.io fingerprint values
+      // Unspecified fields are randomized from realistic value pools
+    },
+  },
+});
+```
+
+## API Reference
+
+### Authentication
+
+| Method | Auth | Description |
+| --- | --- | --- |
+| `login(username, password, email?, twoFactorSecret?)` | -- | Log in with credentials |
+| `logout()` | -- | Log out and revert to guest auth |
+| `isLoggedIn()` | -- | Check if authenticated |
+| `setCookies(cookies)` | -- | Set session cookies (recommended auth method) |
+| `getCookies()` | -- | Get current session cookies |
+| `clearCookies()` | -- | Clear all session cookies |
+
+### Reading Tweets
+
+| Method | Auth | Description |
+| --- | --- | --- |
+| `getTweet(id)` | No | Fetch a single tweet by ID |
+| `getTweets(user, maxTweets?)` | No | Fetch tweets from a user's timeline |
+| `getTweetsByUserId(userId, maxTweets?)` | No | Fetch tweets by user ID |
+| `getLatestTweet(user, includeRetweets?, max?)` | No | Fetch most recent tweet from a user |
+| `getTweetsAndReplies(user, maxTweets?)` | No | Fetch tweets and replies from a user |
+| `getTweetsAndRepliesByUserId(userId, maxTweets?)` | No | Fetch tweets and replies by user ID |
+| `getLikedTweets(user, maxTweets?)` | Yes | Fetch tweets liked by a user |
+| `getTweetWhere(tweets, query)` | -- | Find first tweet matching a query |
+| `getTweetsWhere(tweets, query)` | -- | Find all tweets matching a query |
+
+### Searching
+
+| Method | Auth | Description |
+| --- | --- | --- |
+| `searchTweets(query, maxTweets, searchMode?)` | Yes | Search tweets with query |
+| `searchProfiles(query, maxProfiles)` | Yes | Search profiles with query |
+| `fetchSearchTweets(query, maxTweets, searchMode, cursor?)` | Yes | Paginated tweet search |
+| `fetchSearchProfiles(query, maxProfiles, cursor?)` | Yes | Paginated profile search |
+
+### Profiles
+
+| Method | Auth | Description |
+| --- | --- | --- |
+| `getProfile(username)` | No | Fetch a user profile |
+| `getUserIdByScreenName(screenName)` | No | Resolve username to user ID |
+
+### Relationships
+
+| Method | Auth | Description |
+| --- | --- | --- |
+| `getFollowers(userId, maxProfiles)` | No | Fetch profiles that follow a user |
+| `getFollowing(userId, maxProfiles)` | No | Fetch profiles a user follows |
+| `fetchProfileFollowers(userId, maxProfiles, cursor?)` | No | Paginated follower fetch |
+| `fetchProfileFollowing(userId, maxProfiles, cursor?)` | No | Paginated following fetch |
+
+### Trends
+
+| Method | Auth | Description |
+| --- | --- | --- |
+| `getTrends()` | No | Fetch current trending topics |
+
+### Lists
+
+| Method | Auth | Description |
+| --- | --- | --- |
+| `fetchListTweets(listId, maxTweets, cursor?)` | Yes | Fetch tweets from a list |
+
+### Direct Messages
+
+| Method | Auth | Description |
+| --- | --- | --- |
+| `getDmInbox()` | Yes | Get DM inbox |
+| `getDmConversation(conversationId, cursor?)` | Yes | Get a DM conversation |
+| `getDmMessages(conversationId, maxMessages?, cursor?)` | Yes | Iterate messages in a conversation |
+| `findDmConversationsByUserId(inbox, userId)` | Yes | Find conversations with a user |
+
+### Write Operations
+
+| Method | Auth | Description |
+| --- | --- | --- |
+| `sendTweet(text, replyToTweetId?)` | Yes | Post a tweet or reply |
+| `quoteTweet(text, quotedTweetId, quotedTweetUsername)` | Yes | Quote-tweet another tweet |
+| `deleteTweet(tweetId)` | Yes | Delete a tweet |
+| `likeTweet(tweetId)` | Yes | Like a tweet |
+| `unlikeTweet(tweetId)` | Yes | Unlike a tweet |
+| `retweet(tweetId)` | Yes | Retweet a tweet |
+| `undoRetweet(tweetId)` | Yes | Undo a retweet |
+| `followUser(username)` | Yes | Follow a user |
+| `unfollowUser(username)` | Yes | Unfollow a user |
+| `bookmarkTweet(tweetId)` | Yes | Bookmark a tweet |
+| `unbookmarkTweet(tweetId)` | Yes | Remove a bookmark |
+
+### Logging
+
+| Method/Property | Description |
+| --- | --- |
+| `scraper.logger` | Access the `ScraperLogger` instance |
+| `logger.getMetrics()` | Get aggregated session metrics |
+| `logger.flush()` | Flush all transports (triggers report generation) |
+| `logger.close()` | Flush and close all transports |
+| `logger.addTransport(transport)` | Add a transport at runtime |
+| `logger.removeTransport(transport)` | Remove a transport at runtime |
 
 ## Contributing
 
 ### Setup
 
-This project currently requires Node 18.x for development and uses Yarn for
-package management.
-[Corepack](https://nodejs.org/dist/latest-v18.x/docs/api/corepack.html) is
-configured for this project, so you don't need to install a particular package
-manager version manually.
+This project uses Yarn for package management. [Corepack](https://nodejs.org/docs/latest/api/corepack.html) is configured, so run `corepack enable` then `yarn` to install dependencies.
 
-> The project supports Node 16.x at runtime, but requires Node 18.x to run its
-> build tools.
+#### Scripts
 
-Just run `corepack enable` to turn on the shims, then run `yarn` to install the
-dependencies.
-
-#### Basic scripts
-
-- `yarn build`: Builds the project into the `dist` folder
-- `yarn test`: Runs the package tests (see [Testing](#testing) first)
-
-Run `yarn help` for general `yarn` usage information.
+- `yarn build` -- Build the project into `dist/`
+- `yarn test` -- Run unit tests
 
 ### Testing
-
-This package includes unit tests for all major functionality. Given the speed at
-which Twitter's private API changes, failing tests are to be expected.
 
 ```sh
 yarn test
 ```
 
-Before running tests, you should configure environment variables for
-authentication.
+Configure environment variables for authenticated tests:
 
 ```
 TWITTER_USERNAME=    # Account username
 TWITTER_PASSWORD=    # Account password
 TWITTER_EMAIL=       # Account email
-TWITTER_COOKIES=     # JSON-serialized array of cookies of an authenticated session
+TWITTER_COOKIES=     # JSON-serialized array of cookies
 PROXY_URL=           # HTTP(s) proxy for requests (optional)
 ```
 
-### Commit message format
+Given the speed at which X's private API changes, some test failures are expected.
 
-We use [Conventional Commits](https://www.conventionalcommits.org), and enforce
-this with precommit checks. Please refer to the Git history for real examples of
-the commit message format.
+### Commit Format
+
+This project uses [Conventional Commits](https://www.conventionalcommits.org). See the Git history for examples.
+
+## License
+
+See [LICENSE](./LICENSE) for details.
