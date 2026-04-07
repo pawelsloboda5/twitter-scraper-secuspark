@@ -50,7 +50,7 @@ export class ReportTransport implements LogTransport {
       return;
     }
 
-    if (PLATFORM_NODE) {
+    if (typeof PLATFORM_NODE === 'undefined' || PLATFORM_NODE) {
       const { writeFile, mkdir } = await import('node:fs/promises');
       const { join } = await import('node:path');
 
