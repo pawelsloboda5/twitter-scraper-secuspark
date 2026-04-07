@@ -1,6 +1,6 @@
 # React Example
 
-Browser usage example in React. Due to Twitter's CORS headers not allowing external websites from calling their APIs,
+Browser usage example in React. Due to X's CORS headers not allowing external websites from calling their APIs,
 this requires using a CORS proxy of some kind.
 
 ## Running
