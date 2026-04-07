@@ -357,7 +357,7 @@ X's API rate-limits clients heavily. By default, the scraper waits for the curre
 You can customize the strategy:
 
 ```typescript
-import { Scraper, RateLimitStrategy } from 'twitter-scraper-secuspark';
+import { Scraper, type RateLimitStrategy, type RateLimitEvent } from 'twitter-scraper-secuspark';
 
 class CustomRateLimitStrategy implements RateLimitStrategy {
   async onRateLimit(event: RateLimitEvent): Promise<void> {
