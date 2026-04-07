@@ -60,6 +60,13 @@ import {
   likeTweet as likeTweetFn,
   retweet as retweetFn,
   followUser as followUserFn,
+  unlikeTweet as unlikeTweetFn,
+  undoRetweet as undoRetweetFn,
+  deleteTweet as deleteTweetFn,
+  unfollowUser as unfollowUserFn,
+  quoteTweet as quoteTweetFn,
+  bookmarkTweet as bookmarkTweetFn,
+  unbookmarkTweet as unbookmarkTweetFn,
   type SendTweetResult,
 } from './writes';
 
@@ -855,5 +862,67 @@ export class Scraper {
    */
   async followUser(username: string): Promise<void> {
     return followUserFn(username, this.auth);
+  }
+
+  /**
+   * Unlike a previously liked tweet.
+   * @param tweetId The tweet ID to unlike
+   */
+  public async unlikeTweet(tweetId: string): Promise<void> {
+    await unlikeTweetFn(tweetId, this.auth);
+  }
+
+  /**
+   * Undo a retweet.
+   * @param tweetId The tweet ID to un-retweet
+   */
+  public async undoRetweet(tweetId: string): Promise<void> {
+    await undoRetweetFn(tweetId, this.auth);
+  }
+
+  /**
+   * Delete a tweet.
+   * @param tweetId The tweet ID to delete
+   */
+  public async deleteTweet(tweetId: string): Promise<void> {
+    await deleteTweetFn(tweetId, this.auth);
+  }
+
+  /**
+   * Unfollow a user by username (without @).
+   * @param username The username to unfollow
+   */
+  public async unfollowUser(username: string): Promise<void> {
+    await unfollowUserFn(username, this.auth);
+  }
+
+  /**
+   * Quote-tweet another tweet.
+   * @param text The commentary text for the quote tweet
+   * @param quotedTweetId The tweet ID being quoted
+   * @param quotedTweetUsername The username of the quoted tweet's author
+   */
+  public async quoteTweet(
+    text: string,
+    quotedTweetId: string,
+    quotedTweetUsername: string,
+  ): Promise<SendTweetResult> {
+    return quoteTweetFn(text, quotedTweetId, quotedTweetUsername, this.auth);
+  }
+
+  /**
+   * Bookmark a tweet.
+   * @param tweetId The tweet ID to bookmark
+   */
+  public async bookmarkTweet(tweetId: string): Promise<void> {
+    await bookmarkTweetFn(tweetId, this.auth);
+  }
+
+  /**
+   * Remove a bookmark from a tweet.
+   * @param tweetId The tweet ID to unbookmark
+   */
+  public async unbookmarkTweet(tweetId: string): Promise<void> {
+    await unbookmarkTweetFn(tweetId, this.auth);
   }
 }
