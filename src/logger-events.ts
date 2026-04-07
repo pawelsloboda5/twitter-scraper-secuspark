@@ -144,7 +144,7 @@ export interface ParseEvent extends ScraperEventBase {
 // Error events
 // ---------------------------------------------------------------------------
 
-export interface ErrorEvent extends ScraperEventBase {
+export interface ScraperErrorEvent extends ScraperEventBase {
   event: 'error';
   level: 'error';
   code?: 'API_ERROR' | 'AUTH_ERROR' | 'PARSE_ERROR' | 'NETWORK_ERROR';
@@ -167,4 +167,4 @@ export type ScraperEvent =
   | ScrapePageEvent
   | ScrapeCompleteEvent
   | ParseEvent
-  | ErrorEvent;
+  | ScraperErrorEvent;
