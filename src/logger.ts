@@ -157,6 +157,8 @@ export class ScraperLogger {
 
   // -------------------------------------------------------------------------
   // Internal metrics bookkeeping
+  // SYNC: This logic mirrors buildMetrics() in logger-reports.ts.
+  // If you add a new event type, update both places.
   // -------------------------------------------------------------------------
 
   private getOrCreateEndpoint(endpoint: string): EndpointMetrics {

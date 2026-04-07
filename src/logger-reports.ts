@@ -32,7 +32,14 @@ export class ReportTransport implements LogTransport {
   name = 'report';
   private events: ScraperEvent[] = [];
 
-  constructor(private options: ReportTransportOptions) {}
+  constructor(private options: ReportTransportOptions) {
+    if (typeof PLATFORM_NODE !== 'undefined' && !PLATFORM_NODE) {
+      throw new Error(
+        'ReportTransport requires Node.js for file I/O. ' +
+          'Use ConsoleTransport or JsonLinesTransport in browser environments.',
+      );
+    }
+  }
 
   write(event: ScraperEvent): void {
     this.events.push(event);
@@ -70,11 +77,15 @@ export class ReportTransport implements LogTransport {
         await writeFile(filePath, content, 'utf-8');
       }
     }
+
+    this.events = [];
   }
 }
 
 // ---------------------------------------------------------------------------
 // Metrics builder (shared by JSON and Markdown reports)
+// SYNC: This logic mirrors ScraperLogger.updateMetrics() in logger.ts.
+// If you add a new event type, update both places.
 // ---------------------------------------------------------------------------
 
 function buildMetrics(
