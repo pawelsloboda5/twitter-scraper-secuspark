@@ -979,7 +979,7 @@ declare enum SearchMode {
 
 interface SendTweetResult {
     tweetId?: string;
-    response: Response;
+    response: Record<string, unknown>;
 }
 /**
  * Send a tweet or reply to a tweet.

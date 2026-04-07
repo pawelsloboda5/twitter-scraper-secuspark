@@ -1,8 +1,8 @@
 import debug from 'debug';
 import { Cookie, CookieJar } from 'tough-cookie';
 import setCookie from 'set-cookie-parser';
-import { Headers as Headers$1 } from 'headers-polyfill';
-import fetch$1 from 'cross-fetch';
+import { Headers } from 'headers-polyfill';
+import fetch from 'cross-fetch';
 import { Type } from '@sinclair/typebox';
 import { Check } from '@sinclair/typebox/value';
 import * as OTPAuth from 'otpauth';
@@ -1003,7 +1003,7 @@ function withTransform(fetchFn, transform) {
 class TwitterGuestAuth {
   constructor(bearerToken, options) {
     this.options = options;
-    this.fetch = withTransform(options?.fetch ?? fetch$1, options?.transform);
+    this.fetch = withTransform(options?.fetch ?? fetch, options?.transform);
     this.rateLimitStrategy = options?.rateLimitStrategy ?? new WaitingRateLimitStrategy();
     this.bearerToken = bearerToken;
     this.jar = new CookieJar();
@@ -1141,7 +1141,7 @@ class TwitterGuestAuth {
   }
   async updateGuestTokenCore() {
     const guestActivateUrl = "https://api.x.com/1.1/guest/activate.json";
-    const headers = new Headers$1({
+    const headers = new Headers({
       authorization: `Bearer ${this.bearerToken}`,
       "user-agent": CHROME_USER_AGENT,
       accept: "*/*",
@@ -1369,7 +1369,7 @@ async function jitter(maxMs) {
   const jitter2 = Math.random() * maxMs;
   await new Promise((resolve) => setTimeout(resolve, jitter2));
 }
-async function requestApi(url, auth, method = "GET", platform = new Platform(), headers = new Headers$1(), bearerTokenOverride, body) {
+async function requestApi(url, auth, method = "GET", platform = new Platform(), headers = new Headers(), bearerTokenOverride, body) {
   log$2(`Making ${method} request to ${url}`);
   const endpoint = extractEndpoint(url);
   const logger = auth.logger;
@@ -1714,7 +1714,7 @@ const _TwitterUserAuth = class _TwitterUserAuth extends TwitterGuestAuth {
    */
   async preflight() {
     try {
-      const headers = new Headers$1({
+      const headers = new Headers({
         accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "accept-language": "en-US,en;q=0.9",
         "sec-ch-ua": CHROME_SEC_CH_UA,
@@ -1756,7 +1756,7 @@ const _TwitterUserAuth = class _TwitterUserAuth extends TwitterGuestAuth {
     }
     try {
       const logoutUrl = "https://api.x.com/1.1/account/logout.json";
-      const headers = new Headers$1();
+      const headers = new Headers();
       await this.installTo(headers, logoutUrl);
       await this.fetch(logoutUrl, {
         method: "POST",
@@ -2163,7 +2163,7 @@ const _TwitterUserAuth = class _TwitterUserAuth extends TwitterGuestAuth {
         2
       )
     );
-    const headers = new Headers$1({
+    const headers = new Headers({
       accept: "*/*",
       "accept-language": "en-US,en;q=0.9",
       "content-type": "application/json",
@@ -3857,23 +3857,16 @@ function findDmConversationsByUserId(inbox, userId) {
   return conversations;
 }
 
-async function getWriteHeaders(auth, contentType = "application/json") {
-  const cookies = await auth.cookieJar().getCookies("https://x.com");
-  const ct0 = cookies.find((c) => c.key === "ct0");
-  const headers = new Headers();
-  headers.set("authorization", `Bearer ${bearerToken2}`);
-  headers.set(
-    "cookie",
-    await auth.cookieJar().getCookieString("https://x.com")
-  );
-  headers.set("content-type", contentType);
-  headers.set("x-twitter-auth-type", "OAuth2Session");
-  headers.set("x-twitter-active-user", "yes");
-  headers.set("x-twitter-client-language", "en");
-  if (ct0) headers.set("x-csrf-token", ct0.value);
-  return headers;
+function throwOnSoftErrors(data, operation) {
+  const errors = data?.errors;
+  if (Array.isArray(errors) && errors.length > 0) {
+    const first = errors[0];
+    throw new Error(
+      `${operation}: ${first.message ?? JSON.stringify(first)} (code ${first.code ?? "unknown"})`
+    );
+  }
 }
-const CREATE_TWEET_URL = "https://x.com/i/api/graphql/a1p9RWpkYKBjWv_I3WzS-A/CreateTweet";
+const CREATE_TWEET_URL = "https://x.com/i/api/graphql/jm93VcEnLxM7My_CL9C_EA/CreateTweet";
 const CREATE_TWEET_FEATURES = {
   interactive_text_enabled: true,
   longform_notetweets_inline_media_enabled: false,
@@ -3912,7 +3905,6 @@ const CREATE_TWEET_FEATURES = {
   responsive_web_twitter_article_tweet_consumption_enabled: false
 };
 async function sendTweet(text, auth, replyToTweetId) {
-  const headers = await getWriteHeaders(auth);
   const variables = {
     tweet_text: text,
     dark_request: false,
@@ -3925,62 +3917,48 @@ async function sendTweet(text, auth, replyToTweetId) {
   if (replyToTweetId) {
     variables.reply = { in_reply_to_tweet_id: replyToTweetId };
   }
-  const response = await fetch(CREATE_TWEET_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      variables,
-      features: CREATE_TWEET_FEATURES,
-      fieldToggles: {}
-    })
-  });
-  await updateCookieJar(auth.cookieJar(), response.headers);
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(
-      `sendTweet failed (${response.status}): ${errText.slice(0, 500)}`
-    );
-  }
-  const data = await response.json();
-  const tweetResult = data?.data?.create_tweet?.tweet_results?.result;
+  const res = await requestApi(
+    CREATE_TWEET_URL,
+    auth,
+    "POST",
+    void 0,
+    void 0,
+    bearerToken2,
+    { variables, features: CREATE_TWEET_FEATURES, fieldToggles: {} }
+  );
+  if (!res.success) throw res.err;
+  throwOnSoftErrors(res.value, "sendTweet");
+  const tweetResult = res.value?.data?.create_tweet?.tweet_results?.result;
   const tweetId = tweetResult?.rest_id ?? tweetResult?.tweet?.rest_id;
-  return { tweetId, response };
+  return { tweetId, response: res.value ?? {} };
 }
 const LIKE_TWEET_URL = "https://x.com/i/api/graphql/lI07N6Otwv1PhnEgXILM7A/FavoriteTweet";
 async function likeTweet(tweetId, auth) {
-  const headers = await getWriteHeaders(auth);
-  const response = await fetch(LIKE_TWEET_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      variables: { tweet_id: tweetId }
-    })
-  });
-  await updateCookieJar(auth.cookieJar(), response.headers);
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(
-      `likeTweet failed (${response.status}): ${errText.slice(0, 300)}`
-    );
-  }
+  const res = await requestApi(
+    LIKE_TWEET_URL,
+    auth,
+    "POST",
+    void 0,
+    void 0,
+    bearerToken2,
+    { variables: { tweet_id: tweetId } }
+  );
+  if (!res.success) throw res.err;
+  throwOnSoftErrors(res.value, "likeTweet");
 }
 const RETWEET_URL = "https://x.com/i/api/graphql/ojPdsZsimiJrUGLR1sjUtA/CreateRetweet";
 async function retweet(tweetId, auth) {
-  const headers = await getWriteHeaders(auth);
-  const response = await fetch(RETWEET_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      variables: { tweet_id: tweetId, dark_request: false }
-    })
-  });
-  await updateCookieJar(auth.cookieJar(), response.headers);
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(
-      `retweet failed (${response.status}): ${errText.slice(0, 300)}`
-    );
-  }
+  const res = await requestApi(
+    RETWEET_URL,
+    auth,
+    "POST",
+    void 0,
+    void 0,
+    bearerToken2,
+    { variables: { tweet_id: tweetId, dark_request: false } }
+  );
+  if (!res.success) throw res.err;
+  throwOnSoftErrors(res.value, "retweet");
 }
 const FOLLOW_URL = "https://api.x.com/1.1/friendships/create.json";
 async function followUser(username, auth) {
@@ -3993,17 +3971,27 @@ async function followUser(username, auth) {
       `Failed to resolve @${username}: ${userIdResult.err.message}`
     );
   }
-  const headers = await getWriteHeaders(
-    auth,
-    "application/x-www-form-urlencoded"
-  );
+  const headers = new Headers();
+  await auth.installTo(headers, FOLLOW_URL, bearerToken2);
+  headers.set("content-type", "application/x-www-form-urlencoded");
   headers.set("referer", `https://x.com/${username}`);
+  if (auth instanceof TwitterGuestAuth && auth.options?.experimental?.xClientTransactionId) {
+    try {
+      const txId = await generateTransactionId(
+        FOLLOW_URL,
+        auth.fetch.bind(auth),
+        "POST"
+      );
+      headers.set("x-client-transaction-id", txId);
+    } catch {
+    }
+  }
   const body = new URLSearchParams({
     include_profile_interstitial_type: "1",
     skip_status: "true",
     user_id: userIdResult.value
   });
-  const response = await fetch(FOLLOW_URL, {
+  const response = await auth.fetch(FOLLOW_URL, {
     method: "POST",
     headers,
     body: body.toString()
@@ -4018,57 +4006,45 @@ async function followUser(username, auth) {
 }
 const UNLIKE_TWEET_URL = "https://x.com/i/api/graphql/ZYKSe-w7KEslx3JhSIk5LA/UnfavoriteTweet";
 async function unlikeTweet(tweetId, auth) {
-  const headers = await getWriteHeaders(auth);
-  const response = await fetch(UNLIKE_TWEET_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      variables: { tweet_id: tweetId }
-    })
-  });
-  await updateCookieJar(auth.cookieJar(), response.headers);
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(
-      `unlikeTweet failed (${response.status}): ${errText.slice(0, 300)}`
-    );
-  }
+  const res = await requestApi(
+    UNLIKE_TWEET_URL,
+    auth,
+    "POST",
+    void 0,
+    void 0,
+    bearerToken2,
+    { variables: { tweet_id: tweetId } }
+  );
+  if (!res.success) throw res.err;
+  throwOnSoftErrors(res.value, "unlikeTweet");
 }
 const UNDO_RETWEET_URL = "https://x.com/i/api/graphql/iQtK4dl5hBmXewYZuEOKVw/DeleteRetweet";
 async function undoRetweet(tweetId, auth) {
-  const headers = await getWriteHeaders(auth);
-  const response = await fetch(UNDO_RETWEET_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      variables: { source_tweet_id: tweetId, dark_request: false }
-    })
-  });
-  await updateCookieJar(auth.cookieJar(), response.headers);
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(
-      `undoRetweet failed (${response.status}): ${errText.slice(0, 300)}`
-    );
-  }
+  const res = await requestApi(
+    UNDO_RETWEET_URL,
+    auth,
+    "POST",
+    void 0,
+    void 0,
+    bearerToken2,
+    { variables: { source_tweet_id: tweetId, dark_request: false } }
+  );
+  if (!res.success) throw res.err;
+  throwOnSoftErrors(res.value, "undoRetweet");
 }
 const DELETE_TWEET_URL = "https://x.com/i/api/graphql/VaenaVgh5q5ih7kvyVjgtg/DeleteTweet";
 async function deleteTweet(tweetId, auth) {
-  const headers = await getWriteHeaders(auth);
-  const response = await fetch(DELETE_TWEET_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      variables: { tweet_id: tweetId, dark_request: false }
-    })
-  });
-  await updateCookieJar(auth.cookieJar(), response.headers);
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(
-      `deleteTweet failed (${response.status}): ${errText.slice(0, 300)}`
-    );
-  }
+  const res = await requestApi(
+    DELETE_TWEET_URL,
+    auth,
+    "POST",
+    void 0,
+    void 0,
+    bearerToken2,
+    { variables: { tweet_id: tweetId, dark_request: false } }
+  );
+  if (!res.success) throw res.err;
+  throwOnSoftErrors(res.value, "deleteTweet");
 }
 const UNFOLLOW_URL = "https://api.x.com/1.1/friendships/destroy.json";
 async function unfollowUser(username, auth) {
@@ -4081,17 +4057,27 @@ async function unfollowUser(username, auth) {
       `Failed to resolve @${username}: ${userIdResult.err.message}`
     );
   }
-  const headers = await getWriteHeaders(
-    auth,
-    "application/x-www-form-urlencoded"
-  );
+  const headers = new Headers();
+  await auth.installTo(headers, UNFOLLOW_URL, bearerToken2);
+  headers.set("content-type", "application/x-www-form-urlencoded");
   headers.set("referer", `https://x.com/${username}`);
+  if (auth instanceof TwitterGuestAuth && auth.options?.experimental?.xClientTransactionId) {
+    try {
+      const txId = await generateTransactionId(
+        UNFOLLOW_URL,
+        auth.fetch.bind(auth),
+        "POST"
+      );
+      headers.set("x-client-transaction-id", txId);
+    } catch {
+    }
+  }
   const body = new URLSearchParams({
     include_profile_interstitial_type: "1",
     skip_status: "true",
     user_id: userIdResult.value
   });
-  const response = await fetch(UNFOLLOW_URL, {
+  const response = await auth.fetch(UNFOLLOW_URL, {
     method: "POST",
     headers,
     body: body.toString()
@@ -4105,7 +4091,6 @@ async function unfollowUser(username, auth) {
   }
 }
 async function quoteTweet(text, quotedTweetId, quotedTweetUsername, auth) {
-  const headers = await getWriteHeaders(auth);
   const variables = {
     tweet_text: text,
     dark_request: false,
@@ -4116,62 +4101,48 @@ async function quoteTweet(text, quotedTweetId, quotedTweetUsername, auth) {
     semantic_annotation_ids: [],
     attachment_url: `https://x.com/${quotedTweetUsername}/status/${quotedTweetId}`
   };
-  const response = await fetch(CREATE_TWEET_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      variables,
-      features: CREATE_TWEET_FEATURES,
-      fieldToggles: {}
-    })
-  });
-  await updateCookieJar(auth.cookieJar(), response.headers);
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(
-      `quoteTweet failed (${response.status}): ${errText.slice(0, 500)}`
-    );
-  }
-  const data = await response.json();
-  const tweetResult = data?.data?.create_tweet?.tweet_results?.result;
+  const res = await requestApi(
+    CREATE_TWEET_URL,
+    auth,
+    "POST",
+    void 0,
+    void 0,
+    bearerToken2,
+    { variables, features: CREATE_TWEET_FEATURES, fieldToggles: {} }
+  );
+  if (!res.success) throw res.err;
+  throwOnSoftErrors(res.value, "quoteTweet");
+  const tweetResult = res.value?.data?.create_tweet?.tweet_results?.result;
   const tweetId = tweetResult?.rest_id ?? tweetResult?.tweet?.rest_id;
-  return { tweetId, response };
+  return { tweetId, response: res.value ?? {} };
 }
 const BOOKMARK_URL = "https://x.com/i/api/graphql/aoDbu3RHznuiSkQ9aNM67Q/CreateBookmark";
 async function bookmarkTweet(tweetId, auth) {
-  const headers = await getWriteHeaders(auth);
-  const response = await fetch(BOOKMARK_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      variables: { tweet_id: tweetId }
-    })
-  });
-  await updateCookieJar(auth.cookieJar(), response.headers);
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(
-      `bookmarkTweet failed (${response.status}): ${errText.slice(0, 300)}`
-    );
-  }
+  const res = await requestApi(
+    BOOKMARK_URL,
+    auth,
+    "POST",
+    void 0,
+    void 0,
+    bearerToken2,
+    { variables: { tweet_id: tweetId } }
+  );
+  if (!res.success) throw res.err;
+  throwOnSoftErrors(res.value, "bookmarkTweet");
 }
 const UNBOOKMARK_URL = "https://x.com/i/api/graphql/Wlmlj2-xISyz1NhUWsBPCA/DeleteBookmark";
 async function unbookmarkTweet(tweetId, auth) {
-  const headers = await getWriteHeaders(auth);
-  const response = await fetch(UNBOOKMARK_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      variables: { tweet_id: tweetId }
-    })
-  });
-  await updateCookieJar(auth.cookieJar(), response.headers);
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(
-      `unbookmarkTweet failed (${response.status}): ${errText.slice(0, 300)}`
-    );
-  }
+  const res = await requestApi(
+    UNBOOKMARK_URL,
+    auth,
+    "POST",
+    void 0,
+    void 0,
+    bearerToken2,
+    { variables: { tweet_id: tweetId } }
+  );
+  if (!res.success) throw res.err;
+  throwOnSoftErrors(res.value, "unbookmarkTweet");
 }
 
 const log = debug("twitter-scraper:scraper");
