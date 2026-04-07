@@ -569,7 +569,11 @@ export class Scraper {
     maxMessages = 20,
     cursor?: DmCursorOptions,
   ): AsyncGenerator<DmMessageEntry, void> {
-    return getDmMessages(conversationId, maxMessages, cursor, this.auth);
+    return this.instrumentGenerator(
+      'getDmMessages',
+      { conversationId, maxMessages },
+      getDmMessages(conversationId, maxMessages, cursor, this.auth),
+    );
   }
 
   /**
@@ -788,7 +792,7 @@ export class Scraper {
         level: 'info',
         operation,
         totalItems,
-        totalPages: 0,
+        totalPages: 0, // Page tracking requires instrumentation inside timeline-async.ts
         durationMs: Date.now() - startTime,
         errors,
       });
