@@ -132,7 +132,9 @@ export class ScraperLogger {
   }
 
   async flush(): Promise<void> {
-    this.metrics.endTime = new Date().toISOString();
+    if (!this.metrics.endTime) {
+      this.metrics.endTime = new Date().toISOString();
+    }
     await Promise.all(
       this.transports
         .filter((t) => typeof t.flush === 'function')
@@ -157,6 +159,24 @@ export class ScraperLogger {
   // Internal metrics bookkeeping
   // -------------------------------------------------------------------------
 
+  private getOrCreateEndpoint(endpoint: string): EndpointMetrics {
+    let entry = this.metrics.requestsByEndpoint[endpoint];
+    if (!entry) {
+      entry = {
+        endpoint,
+        requestCount: 0,
+        totalDurationMs: 0,
+        minDurationMs: Number.MAX_SAFE_INTEGER,
+        maxDurationMs: 0,
+        errorCount: 0,
+        rateLimitCount: 0,
+        lastStatus: 0,
+      };
+      this.metrics.requestsByEndpoint[endpoint] = entry;
+    }
+    return entry;
+  }
+
   private updateMetrics(event: ScraperEvent): void {
     switch (event.event) {
       case 'http.request': {
@@ -171,21 +191,7 @@ export class ScraperLogger {
           this.metrics.failedRequests++;
         }
 
-        const ep = event.endpoint;
-        let entry = this.metrics.requestsByEndpoint[ep];
-        if (!entry) {
-          entry = {
-            endpoint: ep,
-            requestCount: 0,
-            totalDurationMs: 0,
-            minDurationMs: Infinity,
-            maxDurationMs: 0,
-            errorCount: 0,
-            rateLimitCount: 0,
-            lastStatus: 0,
-          };
-          this.metrics.requestsByEndpoint[ep] = entry;
-        }
+        const entry = this.getOrCreateEndpoint(event.endpoint);
         entry.requestCount++;
         entry.totalDurationMs += event.durationMs;
         entry.minDurationMs = Math.min(entry.minDurationMs, event.durationMs);
@@ -201,22 +207,8 @@ export class ScraperLogger {
         this.metrics.rateLimitsHit++;
         this.metrics.totalRateLimitWaitMs += event.waitMs;
 
-        const rlEp = event.endpoint;
-        let rlEntry = this.metrics.requestsByEndpoint[rlEp];
-        if (!rlEntry) {
-          rlEntry = {
-            endpoint: rlEp,
-            requestCount: 0,
-            totalDurationMs: 0,
-            minDurationMs: Infinity,
-            maxDurationMs: 0,
-            errorCount: 0,
-            rateLimitCount: 0,
-            lastStatus: 0,
-          };
-          this.metrics.requestsByEndpoint[rlEp] = rlEntry;
-        }
-        rlEntry.rateLimitCount++;
+        const entry = this.getOrCreateEndpoint(event.endpoint);
+        entry.rateLimitCount++;
         break;
       }
 
