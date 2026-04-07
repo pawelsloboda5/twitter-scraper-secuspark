@@ -1,0 +1,294 @@
+{
+  "results": [
+    {
+      "name": "getTweet (public)",
+      "status": "pass",
+      "durationMs": 1490,
+      "detail": "id=1585338303800578049, text=\"We’re updating Twitter’s sounds to help make them pleasing t...\""
+    },
+    {
+      "name": "getProfile",
+      "status": "pass",
+      "durationMs": 196,
+      "detail": "@twitter, followers=0"
+    },
+    {
+      "name": "getUserIdByScreenName",
+      "status": "pass",
+      "durationMs": 207,
+      "detail": "userId=1683696495198089217"
+    },
+    {
+      "name": "searchTweets (Top)",
+      "status": "pass",
+      "durationMs": 4925,
+      "detail": "5 tweets found"
+    },
+    {
+      "name": "searchTweets (Latest)",
+      "status": "pass",
+      "durationMs": 674,
+      "detail": "5 tweets found"
+    },
+    {
+      "name": "getTweets",
+      "status": "pass",
+      "durationMs": 173,
+      "detail": "0 tweets fetched"
+    },
+    {
+      "name": "getTweetsAndReplies",
+      "status": "pass",
+      "durationMs": 241,
+      "detail": "0 tweets+replies fetched"
+    },
+    {
+      "name": "getTrends",
+      "status": "pass",
+      "durationMs": 249,
+      "detail": "20 trends: United States of America, Bayern, Panicans..."
+    },
+    {
+      "name": "fetchSearchTweets (paginated)",
+      "status": "pass",
+      "durationMs": 2208,
+      "detail": "9 tweets, cursor=yes"
+    },
+    {
+      "name": "searchProfiles",
+      "status": "pass",
+      "durationMs": 297,
+      "detail": "3 profiles found"
+    },
+    {
+      "name": "getFollowers",
+      "status": "pass",
+      "durationMs": 194,
+      "detail": "0 followers fetched"
+    },
+    {
+      "name": "getFollowing",
+      "status": "pass",
+      "durationMs": 168,
+      "detail": "0 following fetched"
+    },
+    {
+      "name": "getLatestTweet",
+      "status": "pass",
+      "durationMs": 1588,
+      "detail": "id=2041566390738665769, text=\"Looking forward to working with Intel on the Terafab!...\""
+    },
+    {
+      "name": "Author metadata on tweets",
+      "status": "pass",
+      "durationMs": 1116,
+      "detail": "followers=237810920, verified=true"
+    },
+    {
+      "name": "isLoggedIn",
+      "status": "pass",
+      "durationMs": 1,
+      "detail": "loggedIn=true"
+    },
+    {
+      "name": "getLikedTweets",
+      "status": "fail",
+      "durationMs": 114,
+      "detail": "",
+      "error": "User not found."
+    },
+    {
+      "name": "getDmInbox",
+      "status": "pass",
+      "durationMs": 292,
+      "detail": "2 conversations"
+    },
+    {
+      "name": "fetchListTweets",
+      "status": "pass",
+      "durationMs": 166,
+      "detail": "0 list tweets"
+    }
+  ],
+  "metrics": {
+    "sessionId": "2917260e229268ef",
+    "startTime": "2026-04-07T22:47:00.475Z",
+    "totalRequests": 19,
+    "successfulRequests": 19,
+    "failedRequests": 0,
+    "rateLimitsHit": 0,
+    "totalRateLimitWaitMs": 0,
+    "requestsByEndpoint": {
+      "TweetDetail": {
+        "endpoint": "TweetDetail",
+        "requestCount": 1,
+        "totalDurationMs": 1485,
+        "minDurationMs": 1485,
+        "maxDurationMs": 1485,
+        "errorCount": 0,
+        "rateLimitCount": 0,
+        "lastStatus": 200
+      },
+      "UserByScreenName": {
+        "endpoint": "UserByScreenName",
+        "requestCount": 4,
+        "totalDurationMs": 692,
+        "minDurationMs": 113,
+        "maxDurationMs": 205,
+        "errorCount": 0,
+        "rateLimitCount": 0,
+        "lastStatus": 200
+      },
+      "SearchTimeline": {
+        "endpoint": "SearchTimeline",
+        "requestCount": 6,
+        "totalDurationMs": 8291,
+        "minDurationMs": 295,
+        "maxDurationMs": 2206,
+        "errorCount": 0,
+        "rateLimitCount": 0,
+        "lastStatus": 200
+      },
+      "UserTweets": {
+        "endpoint": "UserTweets",
+        "requestCount": 2,
+        "totalDurationMs": 1567,
+        "minDurationMs": 172,
+        "maxDurationMs": 1395,
+        "errorCount": 0,
+        "rateLimitCount": 0,
+        "lastStatus": 200
+      },
+      "UserTweetsAndReplies": {
+        "endpoint": "UserTweetsAndReplies",
+        "requestCount": 1,
+        "totalDurationMs": 241,
+        "minDurationMs": 241,
+        "maxDurationMs": 241,
+        "errorCount": 0,
+        "rateLimitCount": 0,
+        "lastStatus": 200
+      },
+      "/2/guide.json": {
+        "endpoint": "/2/guide.json",
+        "requestCount": 1,
+        "totalDurationMs": 247,
+        "minDurationMs": 247,
+        "maxDurationMs": 247,
+        "errorCount": 0,
+        "rateLimitCount": 0,
+        "lastStatus": 200
+      },
+      "Followers": {
+        "endpoint": "Followers",
+        "requestCount": 1,
+        "totalDurationMs": 191,
+        "minDurationMs": 191,
+        "maxDurationMs": 191,
+        "errorCount": 0,
+        "rateLimitCount": 0,
+        "lastStatus": 200
+      },
+      "Following": {
+        "endpoint": "Following",
+        "requestCount": 1,
+        "totalDurationMs": 166,
+        "minDurationMs": 166,
+        "maxDurationMs": 166,
+        "errorCount": 0,
+        "rateLimitCount": 0,
+        "lastStatus": 200
+      },
+      "dm/inbox_initial_state": {
+        "endpoint": "dm/inbox_initial_state",
+        "requestCount": 1,
+        "totalDurationMs": 289,
+        "minDurationMs": 289,
+        "maxDurationMs": 289,
+        "errorCount": 0,
+        "rateLimitCount": 0,
+        "lastStatus": 200
+      },
+      "ListLatestTweetsTimeline": {
+        "endpoint": "ListLatestTweetsTimeline",
+        "requestCount": 1,
+        "totalDurationMs": 165,
+        "minDurationMs": 165,
+        "maxDurationMs": 165,
+        "errorCount": 0,
+        "rateLimitCount": 0,
+        "lastStatus": 200
+      }
+    },
+    "scrapeOperations": [
+      {
+        "operation": "searchTweets",
+        "totalItems": 5,
+        "totalPages": 0,
+        "durationMs": 4925,
+        "errors": 0
+      },
+      {
+        "operation": "searchTweets",
+        "totalItems": 5,
+        "totalPages": 0,
+        "durationMs": 674,
+        "errors": 0
+      },
+      {
+        "operation": "getTweets",
+        "totalItems": 0,
+        "totalPages": 0,
+        "durationMs": 173,
+        "errors": 0
+      },
+      {
+        "operation": "getTweetsAndReplies",
+        "totalItems": 0,
+        "totalPages": 0,
+        "durationMs": 241,
+        "errors": 0
+      },
+      {
+        "operation": "searchProfiles",
+        "totalItems": 3,
+        "totalPages": 0,
+        "durationMs": 296,
+        "errors": 0
+      },
+      {
+        "operation": "getFollowers",
+        "totalItems": 0,
+        "totalPages": 0,
+        "durationMs": 192,
+        "errors": 0
+      },
+      {
+        "operation": "getFollowing",
+        "totalItems": 0,
+        "totalPages": 0,
+        "durationMs": 168,
+        "errors": 0
+      },
+      {
+        "operation": "searchTweets",
+        "totalItems": 1,
+        "totalPages": 0,
+        "durationMs": 1115,
+        "errors": 0
+      },
+      {
+        "operation": "getLikedTweets",
+        "totalItems": 0,
+        "totalPages": 0,
+        "durationMs": 114,
+        "errors": 1
+      }
+    ],
+    "parseSuccessCount": 0,
+    "parseFailureCount": 0,
+    "errors": [],
+    "endTime": "2026-04-07T22:47:14.792Z"
+  },
+  "timestamp": "2026-04-07T22:47:14.803Z"
+}

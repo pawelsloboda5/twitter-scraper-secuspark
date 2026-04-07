@@ -2,7 +2,7 @@
 // Ported from agent-twitter-client, adapted for @the-convocation/twitter-scraper auth
 
 import { TwitterAuth } from './auth';
-import { bearerToken } from './api';
+import { bearerToken2 } from './api';
 import { updateCookieJar } from './requests';
 import { getUserIdByScreenName } from './profile';
 
@@ -16,7 +16,7 @@ async function getWriteHeaders(
   const ct0 = cookies.find((c) => c.key === 'ct0');
 
   const headers = new Headers();
-  headers.set('authorization', `Bearer ${bearerToken}`);
+  headers.set('authorization', `Bearer ${bearerToken2}`);
   headers.set(
     'cookie',
     await auth.cookieJar().getCookieString('https://x.com'),

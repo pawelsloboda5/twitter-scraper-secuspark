@@ -3881,7 +3881,7 @@ async function getWriteHeaders(auth, contentType = "application/json") {
   const cookies = await auth.cookieJar().getCookies("https://x.com");
   const ct0 = cookies.find((c) => c.key === "ct0");
   const headers = new Headers();
-  headers.set("authorization", `Bearer ${bearerToken}`);
+  headers.set("authorization", `Bearer ${bearerToken2}`);
   headers.set(
     "cookie",
     await auth.cookieJar().getCookieString("https://x.com")
