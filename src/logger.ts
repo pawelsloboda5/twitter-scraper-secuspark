@@ -103,10 +103,6 @@ export class ScraperLogger {
   }
 
   emit(event: Omit<ScraperEvent, 'timestamp' | 'sessionId'>): void {
-    if (this.transports.length === 0) {
-      return;
-    }
-
     const stamped: ScraperEvent = {
       ...event,
       timestamp: new Date().toISOString(),
