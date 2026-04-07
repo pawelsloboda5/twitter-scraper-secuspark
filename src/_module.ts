@@ -57,3 +57,35 @@ export type {
   PlaceRaw,
   Video,
 } from './tweets';
+export type { SendTweetResult } from './writes';
+export { sendTweet, likeTweet, retweet, followUser } from './writes';
+export {
+  ScraperLogger,
+  type LogTransport,
+  type SessionMetrics,
+  type EndpointMetrics,
+  type ScrapeOperationMetrics,
+} from './logger';
+export {
+  type ScraperEvent,
+  type ScraperEventBase,
+  type HttpRequestEvent,
+  type HttpResponseEvent,
+  type HttpRateLimitEvent,
+  type AuthEvent,
+  type ScrapeStartEvent,
+  type ScrapePageEvent,
+  type ScrapeCompleteEvent,
+  type ParseEvent,
+  type ScraperErrorEvent,
+  type LogLevel,
+  LOG_LEVEL_PRIORITY,
+} from './logger-events';
+export {
+  ConsoleTransport,
+  type ConsoleTransportOptions,
+  JsonLinesTransport,
+  type JsonLinesTransportOptions,
+  CallbackTransport,
+} from './logger-transports';
+export { ReportTransport, type ReportTransportOptions } from './logger-reports';

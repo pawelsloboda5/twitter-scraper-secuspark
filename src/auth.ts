@@ -15,6 +15,7 @@ import {
   WaitingRateLimitStrategy,
 } from './rate-limit';
 import { AuthenticationError } from './errors';
+import { ScraperLogger } from './logger';
 import debug from 'debug';
 import { generateXPFFHeader } from './xpff';
 
@@ -24,6 +25,7 @@ export interface TwitterAuthOptions {
   fetch: typeof fetch;
   transform: Partial<FetchTransformOptions>;
   rateLimitStrategy: RateLimitStrategy;
+  logger?: ScraperLogger;
   experimental: {
     xClientTransactionId?: boolean;
     xpff?: boolean;
@@ -44,6 +46,9 @@ export interface TwitterAuthOptions {
 
 export interface TwitterAuth {
   fetch: typeof fetch;
+
+  /** Optional structured logger for emitting scraper events. */
+  logger?: ScraperLogger;
 
   /**
    * How to behave when being rate-limited.
@@ -148,6 +153,7 @@ export class TwitterGuestAuth implements TwitterAuth {
   protected rateLimitStrategy: RateLimitStrategy;
 
   fetch: typeof fetch;
+  logger?: ScraperLogger;
 
   constructor(
     bearerToken: string,
@@ -158,6 +164,7 @@ export class TwitterGuestAuth implements TwitterAuth {
       options?.rateLimitStrategy ?? new WaitingRateLimitStrategy();
     this.bearerToken = bearerToken;
     this.jar = new CookieJar();
+    this.logger = options?.logger;
   }
 
   async onRateLimit(event: RateLimitEvent): Promise<void> {

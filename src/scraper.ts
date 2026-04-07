@@ -42,6 +42,7 @@ import {
 } from './tweets';
 import fetch from 'cross-fetch';
 import debug from 'debug';
+import { ScraperLogger, LogTransport } from './logger';
 import { RateLimitStrategy } from './rate-limit';
 import {
   DmConversationTimeline,
@@ -54,6 +55,13 @@ import {
   findDmConversationsByUserId,
   DmConversation,
 } from './direct-messages';
+import {
+  sendTweet as sendTweetFn,
+  likeTweet as likeTweetFn,
+  retweet as retweetFn,
+  followUser as followUserFn,
+  type SendTweetResult,
+} from './writes';
 
 const log = debug('twitter-scraper:scraper');
 const twUrl = 'https://x.com';
@@ -75,6 +83,13 @@ export interface ScraperOptions {
    * A handling strategy for rate limits (HTTP 429).
    */
   rateLimitStrategy: RateLimitStrategy;
+
+  /**
+   * Logging configuration. When omitted, no structured logging occurs.
+   */
+  logging?: {
+    transports: LogTransport[];
+  };
 
   /**
    * Experimental features that may be added, changed, or removed at any time. Use with caution.
@@ -111,6 +126,7 @@ export class Scraper {
   private auth!: TwitterAuth;
   private authTrends!: TwitterAuth;
   private token: string;
+  private _logger: ScraperLogger;
   private readonly subtaskHandlers: Map<string, FlowSubtaskHandler> = new Map();
 
   /**
@@ -119,8 +135,16 @@ export class Scraper {
    * - Reusing Scraper objects is recommended to minimize the time spent authenticating unnecessarily.
    */
   constructor(private readonly options?: Partial<ScraperOptions>) {
+    this._logger = new ScraperLogger(options?.logging?.transports);
     this.token = bearerToken;
     this.useGuestAuth();
+  }
+
+  /**
+   * The structured logger for this scraper instance.
+   */
+  public get logger(): ScraperLogger {
+    return this._logger;
   }
 
   /**
@@ -691,6 +715,7 @@ export class Scraper {
       fetch: this.options?.fetch,
       transform: this.options?.transform,
       rateLimitStrategy: this.options?.rateLimitStrategy,
+      logger: this._logger,
       experimental: {
         xClientTransactionId: this.options?.experimental?.xClientTransactionId,
         xpff: this.options?.experimental?.xpff,
@@ -706,5 +731,40 @@ export class Scraper {
     }
 
     return res.value;
+  }
+
+  // ── Write operations ──────────────────────────────────────────────────
+
+  /**
+   * Send a tweet or reply to a tweet.
+   * @param text The tweet text
+   * @param replyToTweetId Optional tweet ID to reply to
+   */
+  async sendTweet(
+    text: string,
+    replyToTweetId?: string,
+  ): Promise<SendTweetResult> {
+    return sendTweetFn(text, this.auth, replyToTweetId);
+  }
+
+  /**
+   * Like a tweet by ID.
+   */
+  async likeTweet(tweetId: string): Promise<void> {
+    return likeTweetFn(tweetId, this.auth);
+  }
+
+  /**
+   * Retweet a tweet by ID.
+   */
+  async retweet(tweetId: string): Promise<void> {
+    return retweetFn(tweetId, this.auth);
+  }
+
+  /**
+   * Follow a user by username (without @).
+   */
+  async followUser(username: string): Promise<void> {
+    return followUserFn(username, this.auth);
   }
 }
