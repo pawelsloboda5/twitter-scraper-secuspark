@@ -253,3 +253,281 @@ export async function followUser(
     );
   }
 }
+
+// ── unlikeTweet ──────────────────────────────────────────────────────────
+
+const UNLIKE_TWEET_URL =
+  'https://x.com/i/api/graphql/ZYKSe-w7KEslx3JhSIk5LA/UnfavoriteTweet';
+
+/**
+ * Unlike a previously liked tweet.
+ * @param tweetId The tweet ID to unlike
+ * @param auth Authenticated TwitterAuth instance
+ */
+export async function unlikeTweet(
+  tweetId: string,
+  auth: TwitterAuth,
+): Promise<void> {
+  const headers = await getWriteHeaders(auth);
+
+  const response = await fetch(UNLIKE_TWEET_URL, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      variables: { tweet_id: tweetId },
+    }),
+  });
+
+  await updateCookieJar(auth.cookieJar(), response.headers);
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(
+      `unlikeTweet failed (${response.status}): ${errText.slice(0, 300)}`,
+    );
+  }
+}
+
+// ── undoRetweet ──────────────────────────────────────────────────────────
+
+const UNDO_RETWEET_URL =
+  'https://x.com/i/api/graphql/iQtK4dl5hBmXewYZuEOKVw/DeleteRetweet';
+
+/**
+ * Undo a retweet.
+ * @param tweetId The tweet ID to un-retweet
+ * @param auth Authenticated TwitterAuth instance
+ */
+export async function undoRetweet(
+  tweetId: string,
+  auth: TwitterAuth,
+): Promise<void> {
+  const headers = await getWriteHeaders(auth);
+
+  const response = await fetch(UNDO_RETWEET_URL, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      variables: { source_tweet_id: tweetId, dark_request: false },
+    }),
+  });
+
+  await updateCookieJar(auth.cookieJar(), response.headers);
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(
+      `undoRetweet failed (${response.status}): ${errText.slice(0, 300)}`,
+    );
+  }
+}
+
+// ── deleteTweet ──────────────────────────────────────────────────────────
+
+const DELETE_TWEET_URL =
+  'https://x.com/i/api/graphql/VaenaVgh5q5ih7kvyVjgtg/DeleteTweet';
+
+/**
+ * Delete a tweet.
+ * @param tweetId The tweet ID to delete
+ * @param auth Authenticated TwitterAuth instance
+ */
+export async function deleteTweet(
+  tweetId: string,
+  auth: TwitterAuth,
+): Promise<void> {
+  const headers = await getWriteHeaders(auth);
+
+  const response = await fetch(DELETE_TWEET_URL, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      variables: { tweet_id: tweetId, dark_request: false },
+    }),
+  });
+
+  await updateCookieJar(auth.cookieJar(), response.headers);
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(
+      `deleteTweet failed (${response.status}): ${errText.slice(0, 300)}`,
+    );
+  }
+}
+
+// ── unfollowUser ─────────────────────────────────────────────────────────
+
+const UNFOLLOW_URL = 'https://api.x.com/1.1/friendships/destroy.json';
+
+/**
+ * Unfollow a user by username.
+ * @param username The username (without @) to unfollow
+ * @param auth Authenticated TwitterAuth instance
+ */
+export async function unfollowUser(
+  username: string,
+  auth: TwitterAuth,
+): Promise<void> {
+  if (!(await auth.isLoggedIn())) {
+    throw new Error('Must be logged in to unfollow users');
+  }
+
+  // Resolve username to user ID
+  const userIdResult = await getUserIdByScreenName(username, auth);
+  if (!userIdResult.success) {
+    throw new Error(
+      `Failed to resolve @${username}: ${userIdResult.err.message}`,
+    );
+  }
+
+  const headers = await getWriteHeaders(
+    auth,
+    'application/x-www-form-urlencoded',
+  );
+  headers.set('referer', `https://x.com/${username}`);
+
+  const body = new URLSearchParams({
+    include_profile_interstitial_type: '1',
+    skip_status: 'true',
+    user_id: userIdResult.value,
+  });
+
+  const response = await fetch(UNFOLLOW_URL, {
+    method: 'POST',
+    headers,
+    body: body.toString(),
+  });
+
+  await updateCookieJar(auth.cookieJar(), response.headers);
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(
+      `unfollowUser failed (${response.status}): ${errText.slice(0, 300)}`,
+    );
+  }
+}
+
+// ── quoteTweet ───────────────────────────────────────────────────────────
+
+/**
+ * Quote-tweet another tweet.
+ * @param text The commentary text for the quote tweet
+ * @param quotedTweetId The tweet ID being quoted
+ * @param quotedTweetUsername The username of the quoted tweet's author
+ * @param auth Authenticated TwitterAuth instance
+ */
+export async function quoteTweet(
+  text: string,
+  quotedTweetId: string,
+  quotedTweetUsername: string,
+  auth: TwitterAuth,
+): Promise<SendTweetResult> {
+  const headers = await getWriteHeaders(auth);
+
+  const variables: Record<string, any> = {
+    tweet_text: text,
+    dark_request: false,
+    media: {
+      media_entities: [],
+      possibly_sensitive: false,
+    },
+    semantic_annotation_ids: [],
+    attachment_url: `https://x.com/${quotedTweetUsername}/status/${quotedTweetId}`,
+  };
+
+  const response = await fetch(CREATE_TWEET_URL, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      variables,
+      features: CREATE_TWEET_FEATURES,
+      fieldToggles: {},
+    }),
+  });
+
+  await updateCookieJar(auth.cookieJar(), response.headers);
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(
+      `quoteTweet failed (${response.status}): ${errText.slice(0, 500)}`,
+    );
+  }
+
+  // Extract tweet ID from response
+  const data = await response.json();
+  const tweetResult = data?.data?.create_tweet?.tweet_results?.result;
+  const tweetId = tweetResult?.rest_id ?? tweetResult?.tweet?.rest_id;
+
+  return { tweetId, response };
+}
+
+// ── bookmarkTweet ────────────────────────────────────────────────────────
+
+const BOOKMARK_URL =
+  'https://x.com/i/api/graphql/aoDbu3RHznuiSkQ9aNM67Q/CreateBookmark';
+
+/**
+ * Bookmark a tweet.
+ * @param tweetId The tweet ID to bookmark
+ * @param auth Authenticated TwitterAuth instance
+ */
+export async function bookmarkTweet(
+  tweetId: string,
+  auth: TwitterAuth,
+): Promise<void> {
+  const headers = await getWriteHeaders(auth);
+
+  const response = await fetch(BOOKMARK_URL, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      variables: { tweet_id: tweetId },
+    }),
+  });
+
+  await updateCookieJar(auth.cookieJar(), response.headers);
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(
+      `bookmarkTweet failed (${response.status}): ${errText.slice(0, 300)}`,
+    );
+  }
+}
+
+// ── unbookmarkTweet ──────────────────────────────────────────────────────
+
+const UNBOOKMARK_URL =
+  'https://x.com/i/api/graphql/Wlmlj2-xISyz1NhUWsBPCA/DeleteBookmark';
+
+/**
+ * Remove a bookmark from a tweet.
+ * @param tweetId The tweet ID to unbookmark
+ * @param auth Authenticated TwitterAuth instance
+ */
+export async function unbookmarkTweet(
+  tweetId: string,
+  auth: TwitterAuth,
+): Promise<void> {
+  const headers = await getWriteHeaders(auth);
+
+  const response = await fetch(UNBOOKMARK_URL, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      variables: { tweet_id: tweetId },
+    }),
+  });
+
+  await updateCookieJar(auth.cookieJar(), response.headers);
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(
+      `unbookmarkTweet failed (${response.status}): ${errText.slice(0, 300)}`,
+    );
+  }
+}

@@ -58,7 +58,19 @@ export type {
   Video,
 } from './tweets';
 export type { SendTweetResult } from './writes';
-export { sendTweet, likeTweet, retweet, followUser } from './writes';
+export {
+  sendTweet,
+  likeTweet,
+  unlikeTweet,
+  retweet,
+  undoRetweet,
+  deleteTweet,
+  followUser,
+  unfollowUser,
+  quoteTweet,
+  bookmarkTweet,
+  unbookmarkTweet,
+} from './writes';
 export {
   ScraperLogger,
   type LogTransport,
