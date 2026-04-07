@@ -1,16 +1,15 @@
-# CycleTLS Cloudflare Bypass Example
+# CycleTLS Example -- Write Operations & Cloudflare Bypass
 
-This example demonstrates how to use the `@the-convocation/twitter-scraper/cycletls` entrypoint to bypass Cloudflare bot detection when authenticating with X (formerly Twitter).
+This example demonstrates how to use CycleTLS with twitter-scraper-secuspark to:
 
-## Problem
+1. **Bypass Cloudflare bot detection** (403 Forbidden on auth endpoints)
+2. **Enable write operations** (sendTweet, likeTweet, etc.) that require Chrome TLS fingerprints
 
-X's authentication endpoints may be protected by Cloudflare's bot detection, which analyzes TLS fingerprints to detect non-browser clients. Standard Node.js TLS handshakes can trigger `403 Forbidden` errors during login.
+## Why CycleTLS?
 
-## Solution
+X's write endpoints enforce TLS fingerprint checks. Standard Node.js TLS handshakes trigger error 226 ("looks automated"). CycleTLS spoofs Chrome's JA3/JA4r/HTTP2 fingerprints so requests appear browser-native.
 
-This example uses [CycleTLS](https://github.com/Danny-Dasilva/CycleTLS) to mimic Chrome browser TLS fingerprints, allowing requests to pass through Cloudflare's protection.
-
-> **Note:** Cookie-based authentication is the recommended approach and avoids most Cloudflare issues entirely. See the main README for details.
+> **Read operations** work without CycleTLS. Only install it if you need write operations or encounter Cloudflare 403 errors.
 
 ## Installation
 
@@ -20,13 +19,13 @@ yarn install
 
 ## Configuration
 
-Create a `.env` file in this directory with your X credentials:
+Create a `.env.local` file in this directory with your X cookies:
 
 ```
-TWITTER_USERNAME=your_username
-TWITTER_PASSWORD=your_password
-TWITTER_EMAIL=your_email
+TWITTER_COOKIES=[{"key":"auth_token","value":"YOUR_AUTH_TOKEN","domain":".x.com","path":"/","secure":true,"httpOnly":true},{"key":"ct0","value":"YOUR_CT0_TOKEN","domain":".x.com","path":"/","secure":true},{"key":"guest_id","value":"YOUR_GUEST_ID","domain":".x.com","path":"/","secure":true}]
 ```
+
+Get these from your browser: DevTools (F12) -> Application -> Cookies -> `https://x.com`
 
 ## Usage
 
@@ -36,15 +35,31 @@ yarn start
 
 ## How it works
 
-The example imports the `cycleTLSFetch` function from the `/cycletls` subpath:
-
 ```ts
-import { Scraper } from '@the-convocation/twitter-scraper';
-import { cycleTLSFetch, cycleTLSExit } from '@the-convocation/twitter-scraper/cycletls';
+import { Scraper } from 'twitter-scraper-secuspark';
+import { initCycleTLSFetch, cycleTLSFetch, cycleTLSExit } from 'twitter-scraper-secuspark/cycletls';
 
+// Initialize CycleTLS (downloads Chrome fingerprint data)
+await initCycleTLSFetch();
+
+// Create scraper with CycleTLS + experimental anti-bot headers
 const scraper = new Scraper({
   fetch: cycleTLSFetch,
+  experimental: { xClientTransactionId: true, xpff: true },
 });
+
+// Authenticate with cookies
+await scraper.setCookies([...]);
+
+// Write operations now work
+const result = await scraper.sendTweet('Hello!');
+console.log('Tweet ID:', result.tweetId);
+
+// Clean up
+cycleTLSExit();
 ```
 
-This replaces the default fetch implementation with one that uses Chrome-like TLS fingerprints, bypassing Cloudflare's detection.
+Three things are needed for write operations:
+- **CycleTLS** -- Chrome TLS fingerprint spoofing
+- **`xClientTransactionId: true`** -- Generates browser-derived transaction ID
+- **`xpff: true`** -- Generates anti-bot fingerprint header (requires `guest_id` cookie)

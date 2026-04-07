@@ -29,8 +29,9 @@ const scraper = new Scraper();
 
 // Set cookies for authentication (recommended)
 await scraper.setCookies([
-  'ct0=your_ct0_value; Domain=x.com',
-  'auth_token=your_auth_token; Domain=x.com',
+  'auth_token=your_auth_token; Domain=.x.com; Secure; HttpOnly',
+  'ct0=your_ct0_value; Domain=.x.com; Secure',
+  'guest_id=your_guest_id; Domain=.x.com; Secure',
 ]);
 
 // Fetch a tweet
@@ -42,34 +43,49 @@ console.log(tweet?.text);
 
 ### Cookie-based (recommended)
 
-Cookie authentication is the most reliable method. Export `ct0` and `auth_token` from your browser and use them directly.
+Cookie authentication is the most reliable method. Export cookies from your browser and use them directly.
 
 **Step 1: Get cookies from your browser**
 
 1. Log in to x.com in your browser
 2. Open DevTools (F12) -> Application tab -> Cookies -> `https://x.com`
-3. Copy the values of `ct0` and `auth_token`
+3. Copy the values of these three cookies:
+
+| Cookie | Required | Purpose |
+| --- | --- | --- |
+| `auth_token` | Yes | Authentication session (HttpOnly -- use DevTools, not `document.cookie`) |
+| `ct0` | Yes | CSRF token |
+| `guest_id` | Yes | Guest identifier (needed for `x-xp-forwarded-for` anti-bot header) |
 
 **Step 2: Create a `.env.local` file**
 
+Copy `.env.example` to `.env.local` and fill in your values:
+
+```sh
+cp .env.example .env.local
 ```
-TWITTER_COOKIES=[{"key":"ct0","value":"your_ct0_value","domain":"x.com"},{"key":"auth_token","value":"your_auth_token","domain":"x.com"}]
+
+```
+TWITTER_COOKIES=[{"key":"auth_token","value":"YOUR_AUTH_TOKEN","domain":".x.com","path":"/","secure":true,"httpOnly":true},{"key":"ct0","value":"YOUR_CT0_TOKEN","domain":".x.com","path":"/","secure":true},{"key":"guest_id","value":"YOUR_GUEST_ID","domain":".x.com","path":"/","secure":true}]
 ```
 
 **Step 3: Use in code**
 
 ```typescript
 import { Scraper } from 'twitter-scraper-secuspark';
-import { Cookie } from 'tough-cookie';
-import dotenv from 'dotenv';
 
-dotenv.config({ path: '.env.local' });
+const scraper = new Scraper({
+  experimental: { xClientTransactionId: true, xpff: true },
+});
 
-const scraper = new Scraper();
-const cookies = JSON.parse(process.env.TWITTER_COOKIES!).map((c: any) =>
-  Cookie.fromJSON(c),
-);
-await scraper.setCookies(cookies);
+const cookies = JSON.parse(process.env.TWITTER_COOKIES!);
+const setCookies = cookies.map((c: any) => {
+  const parts = [`${c.key}=${c.value}`, `Domain=${c.domain}`, `Path=${c.path}`];
+  if (c.secure) parts.push('Secure');
+  if (c.httpOnly) parts.push('HttpOnly');
+  return parts.join('; ');
+});
+await scraper.setCookies(setCookies);
 
 const loggedIn = await scraper.isLoggedIn();
 console.log('Authenticated:', loggedIn);
@@ -79,8 +95,9 @@ Or set cookies directly from strings:
 
 ```typescript
 await scraper.setCookies([
-  'ct0=abc123; Domain=x.com',
-  'auth_token=xyz789; Domain=x.com',
+  'auth_token=xyz789; Domain=.x.com; Path=/; Secure; HttpOnly',
+  'ct0=abc123; Domain=.x.com; Path=/; Secure',
+  'guest_id=v1%3A12345; Domain=.x.com; Path=/; Secure',
 ]);
 ```
 
@@ -206,7 +223,39 @@ These fields are populated from the user data embedded in the tweet response.
 
 ## Write Operations
 
-All write operations require authentication. They are available both as `Scraper` instance methods and as standalone functions.
+All write operations require authentication. They also require **CycleTLS** and **experimental features** to avoid X's error 226 ("looks automated"). X's write endpoints enforce stricter TLS fingerprint checks than read endpoints.
+
+### Setup for Write Operations
+
+```sh
+npm install cycletls
+```
+
+```typescript
+import { Scraper } from 'twitter-scraper-secuspark';
+import { initCycleTLSFetch, cycleTLSFetch, cycleTLSExit } from 'twitter-scraper-secuspark/cycletls';
+
+// 1. Initialize CycleTLS (spoofs Chrome TLS fingerprint)
+await initCycleTLSFetch();
+
+// 2. Create scraper with CycleTLS + experimental anti-bot headers
+const scraper = new Scraper({
+  fetch: cycleTLSFetch,
+  experimental: { xClientTransactionId: true, xpff: true },
+});
+
+// 3. Authenticate with cookies (must include auth_token, ct0, guest_id)
+const cookies = JSON.parse(process.env.TWITTER_COOKIES!);
+const setCookies = cookies.map((c: any) => {
+  const parts = [`${c.key}=${c.value}`, `Domain=${c.domain}`, `Path=${c.path}`];
+  if (c.secure) parts.push('Secure');
+  if (c.httpOnly) parts.push('HttpOnly');
+  return parts.join('; ');
+});
+await scraper.setCookies(setCookies);
+```
+
+### Available Operations
 
 ```typescript
 // Post a tweet
@@ -238,6 +287,13 @@ await scraper.unfollowUser('username');
 await scraper.bookmarkTweet(tweetId);
 await scraper.unbookmarkTweet(tweetId);
 ```
+
+```typescript
+// Clean up CycleTLS when done
+cycleTLSExit();
+```
+
+> **Why CycleTLS?** Node.js has a different TLS handshake signature than Chrome. X detects this on write endpoints and returns error 226. CycleTLS spoofs Chrome's JA3/JA4r/HTTP2 fingerprints. Read operations work without CycleTLS, but writes require it.
 
 ## Logging System
 
@@ -374,9 +430,9 @@ Built-in strategies:
 - `WaitingRateLimitStrategy` (default) -- Waits for the limit to expire
 - `ErrorRateLimitStrategy` -- Throws immediately on any rate limit
 
-### CycleTLS Bypass
+### CycleTLS (required for write operations)
 
-If X's authentication endpoints return `403 Forbidden` due to Cloudflare bot detection, you can use CycleTLS to mimic Chrome TLS fingerprints:
+CycleTLS spoofs Chrome's TLS fingerprint (JA3, JA4r, HTTP/2 SETTINGS). It is **required for write operations** (sendTweet, likeTweet, etc.) -- X's write endpoints reject Node.js TLS handshakes with error 226. It also fixes `403 Forbidden` from Cloudflare bot detection on auth endpoints.
 
 ```sh
 npm install cycletls
@@ -384,19 +440,24 @@ npm install cycletls
 
 ```typescript
 import { Scraper } from 'twitter-scraper-secuspark';
-import { cycleTLSFetch, cycleTLSExit } from 'twitter-scraper-secuspark/cycletls';
+import { initCycleTLSFetch, cycleTLSFetch, cycleTLSExit } from 'twitter-scraper-secuspark/cycletls';
+
+await initCycleTLSFetch();
 
 const scraper = new Scraper({
   fetch: cycleTLSFetch,
+  experimental: { xClientTransactionId: true, xpff: true },
 });
 
-await scraper.login('username', 'password', 'email');
+// ... authenticate and use scraper ...
 
 // Clean up when done
 cycleTLSExit();
 ```
 
 The `/cycletls` entrypoint is Node.js only and will not work in browser environments.
+
+> **Read operations** work without CycleTLS. Only install it if you need write operations or encounter Cloudflare 403 errors.
 
 ### Browser Usage with CORS Proxy
 
@@ -432,11 +493,13 @@ const scraper = new Scraper({
 
 ### Experimental Features
 
+These features generate additional anti-bot headers. **Enable `xClientTransactionId` and `xpff` for write operations** -- they are required alongside CycleTLS to avoid error 226.
+
 ```typescript
 const scraper = new Scraper({
   experimental: {
-    xClientTransactionId: true,  // Generate x-client-transaction-id header
-    xpff: true,                  // Generate x-xp-forwarded-for header
+    xClientTransactionId: true,  // Generate x-client-transaction-id header (required for writes)
+    xpff: true,                  // Generate x-xp-forwarded-for header (required for writes, needs guest_id cookie)
     flowStepDelay: 2000,         // Delay between login steps (ms) to avoid bot detection
     browserProfile: {            // Override Castle.io fingerprint values
       // Unspecified fields are randomized from realistic value pools
@@ -444,6 +507,13 @@ const scraper = new Scraper({
   },
 });
 ```
+
+| Feature | Required for writes | What it does |
+| --- | --- | --- |
+| `xClientTransactionId` | Yes | Generates a browser-derived transaction ID from x.com HTML |
+| `xpff` | Yes | Generates an AES-GCM encrypted fingerprint header (requires `guest_id` cookie) |
+| `flowStepDelay` | No | Adds human-like delays between login flow steps |
+| `browserProfile` | No | Overrides Castle.io fingerprint token values |
 
 ## API Reference
 
@@ -562,13 +632,14 @@ This project uses Yarn for package management. [Corepack](https://nodejs.org/doc
 yarn test
 ```
 
-Configure environment variables for authenticated tests:
+Configure environment variables for authenticated tests by copying `.env.example`:
+
+```sh
+cp .env.example .env.local
+```
 
 ```
-TWITTER_USERNAME=    # Account username
-TWITTER_PASSWORD=    # Account password
-TWITTER_EMAIL=       # Account email
-TWITTER_COOKIES=     # JSON-serialized array of cookies
+TWITTER_COOKIES=     # JSON array with auth_token, ct0, guest_id cookies (see .env.example)
 PROXY_URL=           # HTTP(s) proxy for requests (optional)
 ```
 
